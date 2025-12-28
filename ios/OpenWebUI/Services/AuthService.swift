@@ -8,11 +8,12 @@
 import Foundation
 import Combine
 
-class AuthService: ObservableObject {
-    static let shared = AuthService()
+@MainActor
+public class AuthService: ObservableObject {
+    public static let shared = AuthService()
     
-    @Published var isAuthenticated: Bool = false
-    @Published var currentUser: User?
+    @Published public var isAuthenticated: Bool = false
+    @Published public var currentUser: User?
     
     private let apiClient = APIClient.shared
     private var cancellables = Set<AnyCancellable>()

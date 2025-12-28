@@ -13,19 +13,35 @@ struct ModelsView: View {
     var body: some View {
         NavigationStack {
             List {
-                Section("Cloud Models") {
-                    ForEach(viewModel.cloudModels) { model in
-                        ModelRow(model: model)
+                if !viewModel.localModels.isEmpty {
+                    Section("On-Device Models") {
+                        ForEach(viewModel.localModels) { model in
+                            LocalModelRow(localModel: model)
+                        }
                     }
                 }
                 
-                Section("Local Models") {
-                    ForEach(viewModel.localModels) { model in
-                        LocalModelRow(localModel: model)
+                if !viewModel.cloudModels.isEmpty {
+                    Section("Cloud Models") {
+                        ForEach(viewModel.cloudModels) { model in
+                            ModelRow(model: model)
+                        }
                     }
-                    
-                    Button(action: {}) {
-                        Label("Download Model", systemImage: "arrow.down.circle")
+                } else if viewModel.externalAPIURL.isEmpty {
+                    Section {
+                        VStack(alignment: .center, spacing: 12) {
+                            Image(systemName: "cloud.slash")
+                                .font(.largeTitle)
+                                .foregroundStyle(.secondary)
+                            Text("No Cloud Models")
+                                .font(.headline)
+                            Text("Configure an external API in Settings to use cloud models")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .multilineTextAlignment(.center)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 40)
                     }
                 }
             }
@@ -96,21 +112,32 @@ class ModelsViewModel: ObservableObject {
     @Published var localModels: [LocalModel] = []
     @Published var isLoading = false
     
+    @AppStorage("externalAPIURL") var externalAPIURL = ""
+    @AppStorage("externalAPIKey") private var externalAPIKey = ""
+    
     private let openAIService = OpenAIService.shared
-    private let mlxService = MLXService.shared
     
     func loadModels() async {
         isLoading = true
         
-        // Load cloud models
-        do {
-            cloudModels = try await openAIService.listModels()
-        } catch {
-            print("Error loading cloud models: \(error)")
+        // Always load local Apple Intelligence model first
+        if #available(iOS 26.0, *) {
+            let mlxService = MLXService.shared
+            localModels = mlxService.listLocalModels()
         }
         
-        // Load local models
-        localModels = mlxService.listLocalModels()
+        // Only load cloud models if user has configured an external API
+        if !externalAPIURL.isEmpty && !externalAPIURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            do {
+                cloudModels = try await openAIService.listModels()
+            } catch {
+                print("Error loading cloud models: \(error)")
+                cloudModels = []
+            }
+        } else {
+            // No external API configured, clear cloud models
+            cloudModels = []
+        }
         
         isLoading = false
     }

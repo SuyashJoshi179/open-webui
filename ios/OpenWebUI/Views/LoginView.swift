@@ -7,7 +7,7 @@
 
 import SwiftUI
 
-struct LoginView: View {
+public struct LoginView: View {
     @EnvironmentObject var authService: AuthService
     
     @State private var email = ""
@@ -16,7 +16,9 @@ struct LoginView: View {
     @State private var errorMessage: String?
     @State private var showSignup = false
     
-    var body: some View {
+    public init() {}
+    
+    public var body: some View {
         NavigationStack {
             VStack(spacing: 20) {
                 // Logo
@@ -38,8 +40,10 @@ struct LoginView: View {
                     TextField("Email", text: $email)
                         .textFieldStyle(.roundedBorder)
                         .textContentType(.emailAddress)
+                        #if os(iOS)
                         .autocapitalization(.none)
                         .keyboardType(.emailAddress)
+                        #endif
                     
                     SecureField("Password", text: $password)
                         .textFieldStyle(.roundedBorder)
@@ -134,8 +138,10 @@ struct SignupView: View {
                     TextField("Email", text: $email)
                         .textFieldStyle(.roundedBorder)
                         .textContentType(.emailAddress)
+                        #if os(iOS)
                         .autocapitalization(.none)
                         .keyboardType(.emailAddress)
+                        #endif
                     
                     SecureField("Password", text: $password)
                         .textFieldStyle(.roundedBorder)
@@ -177,7 +183,9 @@ struct SignupView: View {
                 
                 Spacer()
             }
+            #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
+            #endif
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") {

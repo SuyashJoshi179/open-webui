@@ -8,6 +8,7 @@
 import Foundation
 import Combine
 
+@MainActor
 class APIClient {
     static let shared = APIClient()
     

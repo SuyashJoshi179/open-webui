@@ -7,6 +7,7 @@
 
 import Foundation
 
+@MainActor
 class ToolService {
     static let shared = ToolService()
     
@@ -143,7 +144,7 @@ struct UpdateToolRequest: Codable {
     let enabled: Bool?
 }
 
-struct ExecuteToolRequest: Codable {
+struct ExecuteToolRequest: Encodable {
     let toolId: String
     let arguments: [String: Any]
     

@@ -7,10 +7,12 @@
 
 import SwiftUI
 
-struct MainTabView: View {
+public struct MainTabView: View {
     @State private var selectedTab = 0
     
-    var body: some View {
+    public init() {}
+    
+    public var body: some View {
         TabView(selection: $selectedTab) {
             ChatsListView()
                 .tabItem {

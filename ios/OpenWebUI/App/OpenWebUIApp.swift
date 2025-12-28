@@ -2,12 +2,16 @@
 //  OpenWebUIApp.swift
 //  OpenWebUI
 //
-//  iOS app entry point
+//  iOS app entry point (disabled when used as library)
 //
 
 import SwiftUI
 
-@main
+// Note: @main is disabled because this is now a library
+// The actual app entry point is in OpenWebUIApp target
+// #if !TESTING
+// @main
+// #endif
 struct OpenWebUIApp: App {
     @StateObject private var appState = AppState()
     @StateObject private var authService = AuthService.shared

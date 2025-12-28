@@ -7,11 +7,15 @@
 
 import Foundation
 import Combine
+import SwiftUI
 
+@MainActor
 class OpenAIService {
     static let shared = OpenAIService()
     
     private let apiClient = APIClient.shared
+    @AppStorage("externalAPIURL") private var externalAPIURL = ""
+    @AppStorage("externalAPIKey") private var externalAPIKey = ""
     
     private init() {}
     
@@ -68,9 +72,21 @@ class OpenAIService {
     // MARK: - List Models
     
     func listModels() async throws -> [Model] {
-        let response: ModelsResponse = try await apiClient.request(
-            path: "/openai/v1/models"
-        )
+        // Check if external API is configured
+        guard !externalAPIURL.isEmpty else {
+            return [] // No external API configured
+        }
+        
+        // Use custom API client with external URL
+        let url = URL(string: externalAPIURL)!.appendingPathComponent("/models")
+        var request = URLRequest(url: url)
+        
+        if !externalAPIKey.isEmpty {
+            request.setValue("Bearer \(externalAPIKey)", forHTTPHeaderField: "Authorization")
+        }
+        
+        let (data, _) = try await URLSession.shared.data(for: request)
+        let response = try JSONDecoder.api.decode(ModelsResponse.self, from: data)
         return response.data
     }
     

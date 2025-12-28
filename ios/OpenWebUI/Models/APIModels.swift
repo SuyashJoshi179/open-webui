@@ -17,16 +17,16 @@ struct APIResponse<T: Codable>: Codable {
 
 // MARK: - User Models
 
-struct User: Codable, Identifiable {
-    let id: String
-    let email: String
-    let name: String
-    let role: UserRole
-    let profileImageUrl: String?
-    let createdAt: Date
-    let updatedAt: Date
+public struct User: Codable, Identifiable {
+    public let id: String
+    public let email: String
+    public let name: String
+    public let role: UserRole
+    public let profileImageUrl: String?
+    public let createdAt: Date
+    public let updatedAt: Date
     
-    enum UserRole: String, Codable {
+    public enum UserRole: String, Codable {
         case admin
         case user
         case pending
@@ -117,26 +117,36 @@ struct ModelsResponse: Codable {
 
 // MARK: - Message Models
 
-struct Message: Codable, Identifiable, Equatable {
-    let id: String
-    let chatId: String
-    let role: MessageRole
-    let content: String
-    let modelId: String?
-    let timestamp: Date
-    let metadata: MessageMetadata?
+public struct Message: Codable, Identifiable, Equatable {
+    public let id: String
+    public let chatId: String
+    public let role: MessageRole
+    public let content: String
+    public let modelId: String?
+    public let timestamp: Date
+    public let metadata: MessageMetadata?
     
-    enum MessageRole: String, Codable {
+    public init(id: String, chatId: String = "", role: MessageRole, content: String, modelId: String? = nil, timestamp: Date, metadata: MessageMetadata? = nil) {
+        self.id = id
+        self.chatId = chatId
+        self.role = role
+        self.content = content
+        self.modelId = modelId
+        self.timestamp = timestamp
+        self.metadata = metadata
+    }
+    
+    public enum MessageRole: String, Codable {
         case system
         case user
         case assistant
         case function
     }
     
-    struct MessageMetadata: Codable, Equatable {
-        let tokens: Int?
-        let finishReason: String?
-        let functionCall: FunctionCall?
+    public struct MessageMetadata: Codable, Equatable {
+        public let tokens: Int?
+        public let finishReason: String?
+        public let functionCall: FunctionCall?
         
         enum CodingKeys: String, CodingKey {
             case tokens
@@ -145,9 +155,9 @@ struct Message: Codable, Identifiable, Equatable {
         }
     }
     
-    struct FunctionCall: Codable, Equatable {
-        let name: String
-        let arguments: String
+    public struct FunctionCall: Codable, Equatable {
+        public let name: String
+        public let arguments: String
     }
     
     enum CodingKeys: String, CodingKey {

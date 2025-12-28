@@ -7,6 +7,7 @@
 
 import Foundation
 
+@MainActor
 class OllamaService {
     static let shared = OllamaService()
     

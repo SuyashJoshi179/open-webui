@@ -7,6 +7,7 @@
 
 import Foundation
 
+@MainActor
 class RAGService {
     static let shared = RAGService()
     

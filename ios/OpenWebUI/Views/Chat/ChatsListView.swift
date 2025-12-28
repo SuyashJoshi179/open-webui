@@ -8,15 +8,13 @@
 import SwiftUI
 
 struct ChatsListView: View {
-    @StateObject private var viewModel = ChatsListViewModel()
+    @StateObject private var chatStorage = ChatStorage.shared
     @State private var showNewChat = false
     
     var body: some View {
         NavigationStack {
             Group {
-                if viewModel.isLoading {
-                    ProgressView()
-                } else if viewModel.chats.isEmpty {
+                if chatStorage.chats.isEmpty {
                     emptyState
                 } else {
                     chatsList
@@ -32,14 +30,7 @@ struct ChatsListView: View {
             }
             .sheet(isPresented: $showNewChat) {
                 NewChatView()
-            }
-            .refreshable {
-                await viewModel.loadChats()
-            }
-            .onAppear {
-                Task {
-                    await viewModel.loadChats()
-                }
+                    .environmentObject(chatStorage)
             }
         }
     }
@@ -66,15 +57,13 @@ struct ChatsListView: View {
     
     private var chatsList: some View {
         List {
-            ForEach(viewModel.chats) { chat in
+            ForEach(chatStorage.chats) { chat in
                 NavigationLink(destination: ChatView(chat: chat)) {
                     ChatRowView(chat: chat)
                 }
             }
             .onDelete { indexSet in
-                Task {
-                    await viewModel.deleteChats(at: indexSet)
-                }
+                chatStorage.deleteChats(at: indexSet)
             }
         }
     }
@@ -95,48 +84,6 @@ struct ChatRowView: View {
             }
         }
         .padding(.vertical, 4)
-    }
-}
-
-// MARK: - View Model
-
-@MainActor
-class ChatsListViewModel: ObservableObject {
-    @Published var chats: [Chat] = []
-    @Published var isLoading = false
-    @Published var errorMessage: String?
-    
-    private let apiClient = APIClient.shared
-    
-    func loadChats() async {
-        isLoading = true
-        errorMessage = nil
-        
-        do {
-            let response: ChatsListResponse = try await apiClient.request(
-                path: "/api/chats"
-            )
-            chats = response.chats
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-        
-        isLoading = false
-    }
-    
-    func deleteChats(at offsets: IndexSet) async {
-        for index in offsets {
-            let chat = chats[index]
-            do {
-                let _: EmptyResponse = try await apiClient.request(
-                    path: "/api/chats/\(chat.id)",
-                    method: "DELETE"
-                )
-                chats.remove(at: index)
-            } catch {
-                errorMessage = error.localizedDescription
-            }
-        }
     }
 }
 

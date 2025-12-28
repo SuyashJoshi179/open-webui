@@ -2,26 +2,27 @@
 //  MLXService.swift
 //  OpenWebUI
 //
-//  Local inference using Apple's FoundationModels framework
-//  This provides on-device Apple Intelligence LLM capabilities
+//  Local inference service using Apple Intelligence
+//  Uses FoundationModels framework (iOS 18+)
 //
 
 import Foundation
-import FoundationModels // iOS 18+ framework for on-device LLM
+import FoundationModels
 
 @MainActor
+@available(iOS 26.0, *)
 class MLXService: ObservableObject {
     static let shared = MLXService()
-    
-    // Session management - holds conversation context
-    private var sessions: [String: LanguageModelSession] = [:]
     
     @Published var isModelAvailable: Bool = false
     @Published var modelStatus: ModelAvailabilityStatus = .checking
     
     private let modelsDirectory = AppConfig.modelsDirectory
     
-    enum ModelAvailabilityStatus {
+    // FoundationModels sessions for maintaining context
+    private var sessions: [String: LanguageModelSession] = [:]
+    
+    enum ModelAvailabilityStatus: Equatable {
         case checking
         case available
         case unavailable(String)
@@ -31,16 +32,39 @@ class MLXService: ObservableObject {
     
     private init() {
         createModelsDirectoryIfNeeded()
-        // Check availability on initialization
-        Task {
-            await checkAvailability()
-        }
+        // Check availability synchronously on init
+        checkAvailabilitySync()
     }
     
     // MARK: - Model Availability
     
-    /// Check if Apple's on-device model is available
-    /// Must be called before attempting inference
+    /// Check if Apple's on-device model is available (synchronous)
+    func checkAvailabilitySync() {
+        let model = SystemLanguageModel.default
+        
+        switch model.availability {
+        case .available:
+            self.isModelAvailable = true
+            self.modelStatus = .available
+            print("✅ Apple Intelligence is available")
+            
+        case .unavailable(let reason):
+            self.isModelAvailable = false
+            switch reason {
+            case .deviceNotEligible:
+                self.modelStatus = .unavailable("Device not eligible for Apple Intelligence")
+            case .appleIntelligenceNotEnabled:
+                self.modelStatus = .unavailable("Apple Intelligence not enabled in Settings")
+            case .modelNotReady:
+                self.modelStatus = .downloading
+            @unknown default:
+                self.modelStatus = .unavailable("Apple Intelligence unavailable")
+            }
+            print("❌ Apple Intelligence unavailable: \(reason)")
+        }
+    }
+    
+    /// Check if Apple's on-device model is available (async version for updates)
     func checkAvailability() async {
         let model = SystemLanguageModel.default
         
@@ -48,46 +72,40 @@ class MLXService: ObservableObject {
         case .available:
             self.isModelAvailable = true
             self.modelStatus = .available
-            print("✅ Apple Intelligence model is ready for inference.")
+            print("✅ Apple Intelligence is available")
             
         case .unavailable(let reason):
             self.isModelAvailable = false
-            
             switch reason {
             case .deviceNotEligible:
                 self.modelStatus = .unavailable("Device not eligible for Apple Intelligence")
             case .appleIntelligenceNotEnabled:
-                self.modelStatus = .disabled
-                print("❌ Apple Intelligence is not enabled in Settings.")
+                self.modelStatus = .unavailable("Apple Intelligence not enabled in Settings")
             case .modelNotReady:
                 self.modelStatus = .downloading
-                print("⏳ Model is still downloading...")
             @unknown default:
-                self.modelStatus = .unavailable("Unknown reason")
+                self.modelStatus = .unavailable("Apple Intelligence unavailable")
             }
-            
-        @unknown default:
-            self.isModelAvailable = false
-            self.modelStatus = .unavailable("Unknown availability status")
+            print("❌ Apple Intelligence unavailable: \(reason)")
         }
     }
     
-    /// List local models (Apple Intelligence + any downloaded external models)
+    /// List local models
     func listLocalModels() -> [LocalModel] {
         var models: [LocalModel] = []
         
-        // Add Apple Intelligence model if available
+        // Add Apple Intelligence as the primary on-device model if available
         if isModelAvailable {
             models.append(LocalModel(
                 id: "apple-intelligence",
-                name: "Apple Intelligence",
-                path: "system",
-                size: 0, // System model, size not applicable
+                name: "Apple Intelligence (On-Device)",
+                path: "",
+                size: 0,
                 createdAt: Date()
             ))
         }
         
-        // List any additional downloaded models
+        // List any downloaded models in the models directory
         do {
             let contents = try FileManager.default.contentsOfDirectory(
                 at: modelsDirectory,
@@ -121,34 +139,28 @@ class MLXService: ObservableObject {
     // MARK: - Session Management
     
     /// Get or create a session for a chat
-    /// Each chat should have its own session to maintain context
-    private func getSession(for chatId: String, systemPrompt: String?) -> LanguageModelSession? {
-        guard isModelAvailable else {
-            print("❌ Model not available")
-            return nil
-        }
-        
+    private func getSession(for chatId: String, systemPrompt: String? = nil) -> LanguageModelSession? {
         if let existingSession = sessions[chatId] {
             return existingSession
         }
         
-        // Create new session with system prompt
-        let instructions = systemPrompt ?? """
-        You are a helpful AI assistant running on-device using Apple Intelligence.
-        Provide clear, accurate, and concise responses.
-        You have access to the user's conversation history within this session.
-        """
+        // Create new session
+        let instructions = systemPrompt ?? "You are a helpful AI assistant. Be concise and accurate."
         
-        let session = LanguageModelSession(
-            model: .default,
-            instructions: instructions
-        )
-        
-        sessions[chatId] = session
-        return session
+        do {
+            let session = try LanguageModelSession(
+                model: .default,
+                instructions: instructions
+            )
+            sessions[chatId] = session
+            return session
+        } catch {
+            print("❌ Failed to create session: \(error)")
+            return nil
+        }
     }
     
-    /// Clear session history for a specific chat
+    /// Clear session for specific chat
     func clearSession(for chatId: String) {
         sessions.removeValue(forKey: chatId)
     }
@@ -160,64 +172,60 @@ class MLXService: ObservableObject {
     
     // MARK: - Inference
     
-    /// Generate text using Apple Intelligence (atomic, non-streaming)
-    /// Use this for background tasks like summarization
+    /// Generate text (stub - requires iOS 26+)
     func generate(
         modelName: String = "apple-intelligence",
         prompt: String,
         chatId: String? = nil,
         systemPrompt: String? = nil
     ) async throws -> String {
-        guard isModelAvailable else {
-            throw MLXServiceError.modelNotAvailable
-        }
-        
-        let sessionId = chatId ?? UUID().uuidString
-        guard let session = getSession(for: sessionId, systemPrompt: systemPrompt) else {
-            throw MLXServiceError.sessionCreationFailed
-        }
-        
-        do {
-            let response = try await session.respond(to: prompt)
-            return response.content
-        } catch {
-            print("❌ Generation failed: \(error.localizedDescription)")
-            throw MLXServiceError.inferenceFailed(error.localizedDescription)
-        }
+        throw MLXServiceError.modelNotAvailable
     }
     
-    /// Stream generation using a local MLX model
+    /// Stream generation with Apple Intelligence
     func streamGenerate(
         modelName: String,
         prompt: String,
+        chatId: String,
         maxTokens: Int = 2048,
         temperature: Double = 0.7,
         topP: Double = 0.9
     ) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
-            Task {
+            Task { @MainActor in
+                guard isModelAvailable else {
+                    continuation.finish(throwing: MLXServiceError.modelNotAvailable)
+                    return
+                }
+                
+                // Get or create session for this chat to maintain context
+                guard let session = getSession(for: chatId) else {
+                    continuation.finish(throwing: MLXServiceError.sessionCreationFailed)
+                    return
+                }
+                
                 do {
-                    guard isModelAvailable(modelName) else {
-                        throw MLXServiceError.modelNotFound(modelName)
-                    }
+                    let stream = session.streamResponse(to: prompt)
                     
-                    // Placeholder for streaming implementation
-                    // In a real implementation, you would yield tokens as they're generated
-                    
-                    throw MLXServiceError.notImplemented
-                    
-                    /*
-                    // Example pseudo-code:
-                    let model = try await loadModel(modelName)
-                    let tokens = try tokenize(prompt, model: model)
-                    
-                    for try await token in model.generateStream(tokens: tokens, maxTokens: maxTokens) {
-                        let text = try detokenize([token], model: model)
-                        continuation.yield(text)
+                    var previousContent = ""
+                    for try await part in stream {
+                        // Calculate delta by comparing with previous content
+                        let currentContent = part.content
+                        if currentContent.hasPrefix(previousContent) {
+                            let delta = String(currentContent.dropFirst(previousContent.count))
+                            if !delta.isEmpty {
+                                continuation.yield(delta)
+                            }
+                        } else {
+                            // Fallback: yield the whole part if not incremental
+                            continuation.yield(currentContent)
+                        }
+                        previousContent = currentContent
                     }
                     
                     continuation.finish()
-                    */
+                    
+                    // Don't clear session - keep it for context
                 } catch {
                     continuation.finish(throwing: error)
                 }
@@ -227,80 +235,45 @@ class MLXService: ObservableObject {
     
     // MARK: - Chat Interface
     
-    /// Chat completion (atomic) - maintains conversation context automatically
+    /// Chat completion (stub - requires iOS 26+)
     func chat(
         modelName: String = "apple-intelligence",
-        messages: [ChatMessage],
+        messages: [MLXChatMessage],
         chatId: String,
         systemPrompt: String? = nil
     ) async throws -> String {
-        // For Apple Intelligence, we just send the latest user message
-        // The session maintains the conversation history
-        guard let lastMessage = messages.last else {
-            throw MLXServiceError.invalidInput("No messages provided")
-        }
-        
-        return try await generate(
-            modelName: modelName,
-            prompt: lastMessage.content,
-            chatId: chatId,
-            systemPrompt: systemPrompt
-        )
+        throw MLXServiceError.modelNotAvailable
     }
     
-    /// Stream chat completion - maintains conversation context automatically
+    /// Stream chat completion (stub - requires iOS 26+)
     func streamChat(
         modelName: String = "apple-intelligence",
-        messages: [ChatMessage],
+        messages: [MLXChatMessage],
         chatId: String,
         systemPrompt: String? = nil
     ) -> AsyncThrowingStream<String, Error> {
-        // For Apple Intelligence, we just send the latest user message
-        // The session maintains the conversation history
-        guard let lastMessage = messages.last else {
-            return AsyncThrowingStream { continuation in
-                continuation.finish(throwing: MLXServiceError.invalidInput("No messages provided"))
-            }
+        AsyncThrowingStream { continuation in
+            continuation.finish(throwing: MLXServiceError.modelNotAvailable)
         }
-        
-        return streamGenerate(
-            modelName: modelName,
-            prompt: lastMessage.content,
-            chatId: chatId,
-            systemPrompt: systemPrompt
-        )
     }
     
     // MARK: - Summarization
     
-    /// Generate a summary using Apple Intelligence
+    /// Generate a summary (stub - requires iOS 26+)
     func summarize(
         text: String,
         chatId: String? = nil
     ) async throws -> String {
-        let prompt = """
-        Summarize the following text in 3-5 bullet points:
-        
-        \(text)
-        """
-        
-        return try await generate(
-            prompt: prompt,
-            chatId: chatId,
-            systemPrompt: "You are a helpful assistant that creates concise summaries."
-        )
+        throw MLXServiceError.modelNotAvailable
     }
     
     // MARK: - Embeddings
     
-    /// Note: Apple's FoundationModels framework doesn't expose embeddings directly
-    /// For embeddings, you would need to use a different approach or wait for API updates
+    /// Create embedding (stub - not available)
     func createEmbedding(
         modelName: String,
         text: String
     ) async throws -> [Float] {
-        // Apple Intelligence doesn't expose embeddings in the current API
-        // You would need to use a cloud service or different local model
         throw MLXServiceError.notImplemented
     }
     
@@ -344,7 +317,7 @@ struct LocalModel: Identifiable {
     let createdAt: Date
 }
 
-struct ChatMessage {
+struct MLXChatMessage {
     let role: String
     let content: String
 }
@@ -357,11 +330,12 @@ enum MLXServiceError: LocalizedError {
     case inferenceFailed(String)
     case invalidInput(String)
     case notImplemented
+    case modelNotFound(String)
     
     var errorDescription: String? {
         switch self {
         case .modelNotAvailable:
-            return "Apple Intelligence model is not available. Please check Settings > Apple Intelligence & Siri."
+            return "Apple Intelligence requires iOS 26 or later."
         case .sessionCreationFailed:
             return "Failed to create language model session"
         case .inferenceFailed(let error):
@@ -369,7 +343,9 @@ enum MLXServiceError: LocalizedError {
         case .invalidInput(let message):
             return "Invalid input: \(message)"
         case .notImplemented:
-            return "This feature is not yet implemented in Apple's FoundationModels framework."
+            return "This feature is not yet implemented."
+        case .modelNotFound(let name):
+            return "Model not found: \(name)"
         }
     }
 }

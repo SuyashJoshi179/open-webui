@@ -9,24 +9,38 @@ import Foundation
 
 // MARK: - Chat
 
-struct Chat: Codable, Identifiable, Equatable {
-    let id: String
-    let userId: String
-    let title: String
-    let modelIds: [String]
-    let createdAt: Date
-    let updatedAt: Date
-    let archived: Bool
-    let pinned: Bool
-    let tags: [String]
-    let metadata: ChatMetadata?
+public struct Chat: Codable, Identifiable, Equatable {
+    public let id: String
+    public let userId: String
+    public let title: String
+    public let modelIds: [String]
+    public let createdAt: Date
+    public let updatedAt: Date
+    public let archived: Bool
+    public let pinned: Bool
+    public let tags: [String]
+    public let metadata: ChatMetadata?
     
-    struct ChatMetadata: Codable, Equatable {
-        let messageCount: Int?
-        let lastMessageAt: Date?
-        let systemPrompt: String?
-        let temperature: Double?
-        let maxTokens: Int?
+    // Public initializer for creating chats
+    public init(id: String, userId: String = "local", title: String, modelIds: [String] = [], createdAt: Date, updatedAt: Date, archived: Bool = false, pinned: Bool = false, tags: [String] = [], metadata: ChatMetadata? = nil, messages: [Message] = []) {
+        self.id = id
+        self.userId = userId
+        self.title = title
+        self.modelIds = modelIds
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+        self.archived = archived
+        self.pinned = pinned
+        self.tags = tags
+        self.metadata = metadata
+    }
+    
+    public struct ChatMetadata: Codable, Equatable {
+        public let messageCount: Int?
+        public let lastMessageAt: Date?
+        public let systemPrompt: String?
+        public let temperature: Double?
+        public let maxTokens: Int?
         
         enum CodingKeys: String, CodingKey {
             case messageCount = "message_count"
