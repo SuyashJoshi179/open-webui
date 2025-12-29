@@ -19,6 +19,9 @@ struct OpenWebUIApp: App {
     init() {
         // Configure app on launch
         configureApp()
+        
+        // Setup AI backends
+        setupBackends()
     }
     
     var body: some Scene {
@@ -49,6 +52,35 @@ struct OpenWebUIApp: App {
     private func setupAppearance() {
         // Configure UI appearance
         // Additional setup can be added here
+    }
+    
+    @MainActor
+    private func setupBackends() {
+        let backendManager = BackendManager.shared
+        
+        // Register Apple Intelligence backend (iOS 26+)
+        if #available(iOS 26.0, *) {
+            backendManager.registerBackend(AppleFoundationBackend())
+            print("✅ Registered Apple Intelligence backend")
+        }
+        
+        // Register OpenAI Compatible backend
+        backendManager.registerBackend(OpenAICompatibleBackend())
+        print("✅ Registered OpenAI Compatible backend")
+        
+        // Register Llama.cpp backend
+        backendManager.registerBackend(LlamaCppBackend())
+        print("✅ Registered Llama.cpp backend")
+        
+        // Register LiteRT backend
+        backendManager.registerBackend(LiteRTBackend())
+        print("✅ Registered LiteRT backend")
+        
+        // Initialize all backends in background
+        Task {
+            await backendManager.initializeAllBackends()
+            print("✅ All backends initialized")
+        }
     }
 }
 

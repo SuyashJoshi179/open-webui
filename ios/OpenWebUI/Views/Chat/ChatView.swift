@@ -260,21 +260,24 @@ class ChatViewModel: ObservableObject {
     }
     
     func loadMessages() async {
-        // Load messages from local storage
-        if let storedChat = chatStorage.chats.first(where: { $0.id == chat.id }) {
-            // Messages are now part of Chat, but let's keep them separate in the view
-            // For now, just load the welcome message if it's the welcome chat
-            if chat.id == "welcome" {
-                messages = [
-                    Message(
-                        id: "welcome-1",
-                        chatId: chat.id,
-                        role: .assistant,
-                        content: "👋 Welcome to Open WebUI for iOS!\n\nThis app uses Apple Intelligence to provide on-device AI assistance. Your conversations stay completely private on your iPhone.\n\nType a message below to start chatting!",
-                        timestamp: Date()
-                    )
-                ]
-            }
+        // Load messages from storage
+        let storedMessages = chatStorage.getMessages(for: chat.id)
+        
+        if !storedMessages.isEmpty {
+            messages = storedMessages
+        } else if chat.id == "welcome" {
+            // Create default welcome message if none exists
+            messages = [
+                Message(
+                    id: "welcome-1",
+                    chatId: chat.id,
+                    role: .assistant,
+                    content: "👋 Welcome to Open WebUI for iOS!\n\nThis app uses Apple Intelligence to provide on-device AI assistance. Your conversations stay completely private on your iPhone.\n\nType a message below to start chatting!",
+                    timestamp: Date()
+                )
+            ]
+            // Save the welcome message
+            chatStorage.saveMessages(messages, for: chat.id)
         }
     }
     
@@ -387,9 +390,8 @@ class ChatViewModel: ObservableObject {
     }
     
     private func saveChatState() {
-        // Update chat in storage with latest messages
-        // Note: This is a simplified version. In production, you'd want to
-        // properly update the Chat model with message references
+        // Save messages to storage
+        chatStorage.saveMessages(messages, for: chat.id)
     }
 }
 
