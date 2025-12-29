@@ -11,58 +11,37 @@ struct BackendSelectionView: View {
     @StateObject private var backendManager = BackendManager.shared
     @State private var selectedBackendId: String?
     @State private var showingSettings = false
-    @State private var settingsBackend: AIBackend?
+    @State private var settingsBackend: (any AIBackend)?
     @State private var showingError = false
     @State private var errorMessage = ""
     
     var body: some View {
         List {
             Section {
-                if let activeBackend = backendManager.activeBackend {
-                    activeBackendCard(activeBackend)
-                } else {
-                    Text("No backend selected")
-                        .foregroundStyle(.secondary)
-                        .italic()
-                }
-            } header: {
-                Text("Active Backend")
-            }
-            
-            Section {
-                ForEach(backendManager.availableBackends, id: \.id) { backend in
-                    BackendRow(
+                ForEach(backendManager.backends, id: \.id) { backend in
+                    BackendRowWithModels(
                         backend: backend,
-                        isActive: backend.id == backendManager.activeBackend?.id,
-                        onSelect: {
-                            Task {
-                                await selectBackend(backend)
-                            }
-                        },
-                        onSettings: {
+                        onAddModel: {
                             settingsBackend = backend
                             showingSettings = true
-                        }
+                        },
+                        backendManager: backendManager
                     )
                 }
             } header: {
-                Text("Available Backends")
+                Text("Backends")
             } footer: {
-                Text("Select a backend to use for AI generation")
+                Text("Add models to backends to make them available for chat")
             }
         }
         .navigationTitle("AI Backends")
         .sheet(isPresented: $showingSettings) {
             if let backend = settingsBackend {
                 NavigationStack {
-                    backend.settings.settingsView()
-                        .toolbar {
-                            ToolbarItem(placement: .cancellationAction) {
-                                Button("Done") {
-                                    showingSettings = false
-                                }
-                            }
-                        }
+                    AddModelView(backend: backend, onDismiss: {
+                        showingSettings = false
+                        backendManager.refreshModels()
+                    })
                 }
             }
         }
@@ -71,186 +50,169 @@ struct BackendSelectionView: View {
         } message: {
             Text(errorMessage)
         }
-        .task {
-            await backendManager.initializeAllBackends()
-        }
     }
     
-    private func activeBackendCard(_ backend: AIBackend) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Image(systemName: backend.iconName)
-                    .font(.title2)
-                    .foregroundStyle(.blue)
-                
-                VStack(alignment: .leading) {
-                    Text(backend.name)
-                        .font(.headline)
-                    Text("Currently Active")
+
+}
+
+// MARK: - Backend Row with Models
+
+struct BackendRowWithModels: View {
+    let backend: any AIBackend
+    let onAddModel: () -> Void
+    @ObservedObject var backendManager: BackendManager
+    @State private var isExpanded = false
+    
+    private var models: [ConfiguredAIModel] {
+        backend.getConfiguredModels()
+    }
+    
+    var body: some View {
+        DisclosureGroup(isExpanded: $isExpanded) {
+            if models.isEmpty {
+                HStack {
+                    Text("No models configured")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .italic()
+                    Spacer()
+                }
+                .padding(.vertical, 4)
+            } else {
+                ForEach(models) { model in
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(model.displayName)
+                            .font(.subheadline)
+                        Text(model.modelIdentifier)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.vertical, 2)
+                }
+            }
+            
+            if backend.supportsModelAddition() {
+                Button(action: onAddModel) {
+                    Label("Add Model", systemImage: "plus.circle.fill")
+                        .font(.subheadline)
+                }
+                .padding(.vertical, 4)
+            }
+        } label: {
+            HStack {
+                Image(systemName: backend.iconName)
+                    .foregroundStyle(.blue)
+                
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(backend.name)
+                        .font(.headline)
+                    Text(backend.description)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
                 
                 Spacer()
                 
-                Image(systemName: "checkmark.circle.fill")
-                    .foregroundStyle(.green)
+                Text("\(models.count) model\(models.count == 1 ? "" : "s")")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
-            
-            Text(backend.description)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-        .padding(.vertical, 4)
-    }
-    
-    private func selectBackend(_ backend: AIBackend) async {
-        do {
-            try await backendManager.setActiveBackend(backend.id)
-        } catch {
-            errorMessage = error.localizedDescription
-            showingError = true
         }
     }
 }
 
-struct BackendRow: View {
-    let backend: AIBackend
-    let isActive: Bool
-    let onSelect: () -> Void
-    let onSettings: () -> Void
+// MARK: - Add Model View
+
+struct AddModelView: View {
+    let backend: any AIBackend
+    let onDismiss: () -> Void
+    
+    @State private var displayName = ""
+    @State private var modelIdentifier = ""
+    @State private var apiURL = ""
+    @State private var apiKey = ""
+    @State private var organizationId = ""
+    @State private var showingError = false
+    @State private var errorMessage = ""
     
     var body: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack {
-                    Image(systemName: backend.iconName)
-                        .foregroundStyle(isActive ? .blue : .secondary)
+        Form {
+            Section("Model Information") {
+                TextField("Display Name", text: $displayName)
+                    .textContentType(.name)
+                TextField("Model ID", text: $modelIdentifier)
+                    .textContentType(.none)
+                    .autocapitalization(.none)
+            }
+            
+            if backend.id == "openai-compatible" {
+                Section("API Configuration") {
+                    TextField("API URL", text: $apiURL)
+                        .textContentType(.URL)
+                        .autocapitalization(.none)
+                        .keyboardType(.URL)
                     
-                    Text(backend.name)
-                        .font(.headline)
+                    SecureField("API Key", text: $apiKey)
+                        .textContentType(.password)
                     
-                    if !backend.isAvailable {
-                        Text("Unavailable")
-                            .font(.caption)
-                            .foregroundStyle(.red)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(Color.red.opacity(0.1))
-                            .cornerRadius(4)
-                    }
+                    TextField("Organization ID (Optional)", text: $organizationId)
+                        .textContentType(.none)
+                        .autocapitalization(.none)
                 }
-                
+            }
+            
+            Section {
                 Text(backend.description)
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                    .lineLimit(2)
             }
-            
-            Spacer()
-            
-            if isActive {
-                Image(systemName: "checkmark.circle.fill")
-                    .foregroundStyle(.green)
-            } else if backend.isAvailable {
-                Button(action: onSelect) {
-                    Text("Select")
-                        .font(.subheadline)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .background(Color.blue)
-                        .foregroundStyle(.white)
-                        .cornerRadius(8)
+        }
+        .navigationTitle("Add Model")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button("Cancel") {
+                    onDismiss()
                 }
             }
             
-            Button(action: onSettings) {
-                Image(systemName: "gear")
-                    .foregroundStyle(.secondary)
-            }
-            .buttonStyle(.plain)
-        }
-        .padding(.vertical, 4)
-    }
-}
-
-// MARK: - Backend Info View
-
-struct BackendInfoView: View {
-    let backend: AIBackend
-    @State private var models: [AIModel] = []
-    @State private var isLoading = true
-    
-    var body: some View {
-        List {
-            Section {
-                InfoRow(label: "Name", value: backend.name)
-                InfoRow(label: "ID", value: backend.id)
-                InfoRow(label: "Status", value: backend.isAvailable ? "Available" : "Unavailable")
-            } header: {
-                Text("Information")
-            }
-            
-            Section {
-                Text(backend.description)
-                    .font(.body)
-            } header: {
-                Text("Description")
-            }
-            
-            Section {
-                if isLoading {
-                    ProgressView()
-                } else if models.isEmpty {
-                    Text("No models available")
-                        .foregroundStyle(.secondary)
-                        .italic()
-                } else {
-                    ForEach(models) { model in
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(model.name)
-                                .font(.headline)
-                            if let description = model.description {
-                                Text(description)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                    }
+            ToolbarItem(placement: .confirmationAction) {
+                Button("Add") {
+                    addModel()
                 }
-            } header: {
-                Text("Models")
+                .disabled(!isValid)
             }
         }
-        .navigationTitle(backend.name)
-        .task {
-            await loadModels()
+        .alert("Error", isPresented: $showingError) {
+            Button("OK") { }
+        } message: {
+            Text(errorMessage)
         }
     }
     
-    private func loadModels() async {
-        defer { isLoading = false }
+    private var isValid: Bool {
+        !displayName.isEmpty && !modelIdentifier.isEmpty &&
+        (backend.id != "openai-compatible" || !apiURL.isEmpty)
+    }
+    
+    private func addModel() {
+        var config = ModelConfiguration()
+        config.displayName = displayName
+        config.modelIdentifier = modelIdentifier
         
-        if backend.isAvailable {
-            do {
-                models = try await backend.listModels()
-            } catch {
-                print("Failed to load models: \(error)")
-            }
+        if backend.id == "openai-compatible" {
+            config.apiURL = apiURL
+            config.apiKey = apiKey.isEmpty ? nil : apiKey
+            config.organizationId = organizationId.isEmpty ? nil : organizationId
         }
-    }
-}
-
-struct InfoRow: View {
-    let label: String
-    let value: String
-    
-    var body: some View {
-        HStack {
-            Text(label)
-                .foregroundStyle(.secondary)
-            Spacer()
-            Text(value)
+        
+        do {
+            _ = try backend.addModel(config)
+            onDismiss()
+        } catch {
+            errorMessage = error.localizedDescription
+            showingError = true
         }
     }
 }

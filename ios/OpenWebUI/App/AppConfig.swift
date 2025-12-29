@@ -8,28 +8,9 @@
 import Foundation
 
 struct AppConfig {
-    // MARK: - Backend Configuration
-    
-    /// Backend API base URL
-    /// Update this to point to your Open WebUI backend instance
-    static var backendURL: String {
-        #if DEBUG
-        return ProcessInfo.processInfo.environment["BACKEND_URL"] ?? "http://localhost:8080"
-        #else
-        return ProcessInfo.processInfo.environment["BACKEND_URL"] ?? "https://api.openwebui.com"
-        #endif
-    }
-    
-    /// WebSocket URL for real-time features
-    static var websocketURL: String {
-        let url = backendURL.replacingOccurrences(of: "http", with: "ws")
-        return "\(url)/ws"
-    }
-    
-    // MARK: - API Configuration
-    
-    static let apiTimeout: TimeInterval = 30.0
-    static let streamingTimeout: TimeInterval = 300.0
+    // MARK: - Local Backend Configuration
+    // This app is fully self-contained with local AI backends (LiteRT, LlamaCpp, Apple Foundation)
+    // No external backend server is required
     
     // MARK: - Local Model Configuration
     

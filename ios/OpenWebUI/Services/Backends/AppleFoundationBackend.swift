@@ -2,16 +2,29 @@
 //  AppleFoundationBackend.swift
 //  OpenWebUI
 //
-//  Apple Intelligence backend using FoundationModels framework (iOS 26+)
+//  Backend for Apple Intelligence (Foundation Models)
+//  Fixed model backend - provides single default model
 //
 
 import Foundation
-import FoundationModels
 import SwiftUI
+import FoundationModels
 
+/// Backend for Apple's on-device Foundation Models (Apple Intelligence)
+/// This backend provides a single fixed model that cannot be added or removed
 @MainActor
 @available(iOS 26.0, *)
 class AppleFoundationBackend: AIBackend, ObservableObject {
+    // MARK: - Auto-Registration (Spring Boot style)
+    
+    static let autoRegister: Void = {
+        if #available(iOS 26.0, *) {
+            BackendManager.registerBackendFactory {
+                AppleFoundationBackend()
+            }
+        }
+    }()
+    
     // MARK: - AIBackend Protocol Properties
     
     let id = "apple-foundation"
@@ -19,152 +32,109 @@ class AppleFoundationBackend: AIBackend, ObservableObject {
     let description = "On-device AI using Apple's Foundation Models. Private, secure, and no API key required."
     let iconName = "apple.logo"
     
-    @Published var isAvailable: Bool = false
-    var settings: AIBackendSettings {
-        get { _settings }
-        set { _settings = newValue as! AppleFoundationSettings }
+    var backendSettings: AIBackendSettings {
+        get { AppleFoundationSettings() }
+        set { /* No settings for Apple Intelligence */ }
     }
     
     // MARK: - Private Properties
     
-    private var _settings = AppleFoundationSettings()
-    private let modelsDirectory = AppConfig.modelsDirectory
+    /// Fixed model ID for Apple Intelligence
+    private let defaultModelId = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
     
-    // FoundationModels sessions for maintaining context
+    /// Language model sessions for maintaining context
+    @available(iOS 26.0, *)
     private var sessions: [String: LanguageModelSession] = [:]
     
+    /// Model availability status
     @Published private(set) var modelStatus: ModelAvailabilityStatus = .checking
     
     enum ModelAvailabilityStatus: Equatable {
         case checking
         case available
         case unavailable(String)
-        case downloading
-        case disabled
     }
     
     // MARK: - Initialization
     
     init() {
-        createModelsDirectoryIfNeeded()
-        // Check availability synchronously on init
         checkAvailabilitySync()
     }
     
-    // MARK: - AIBackend Protocol Methods
+    // MARK: - AIBackend Protocol - Model Management
+    
+    func getConfiguredModels() -> [ConfiguredAIModel] {
+        // Only return model if Apple Intelligence is actually available
+        guard SystemLanguageModel.default.availability == .available else {
+            return []
+        }
+        
+        return [ConfiguredAIModel(
+            id: defaultModelId,
+            backendId: id,
+            displayName: "Apple Intelligence",
+            modelIdentifier: "apple-intelligence-default",
+            configuration: ModelConfiguration(), // No configuration needed
+            capabilities: ModelCapabilities(
+                supportsStreaming: true,
+                supportsVision: false,
+                supportsFunctionCalling: false,
+                maxContextLength: 8192,
+                maxOutputTokens: 4096,
+                supportsEmbeddings: false
+            )
+        )]
+    }
+    
+    func addModel(_ config: ModelConfiguration) throws -> ConfiguredAIModel {
+        throw BackendError.operationNotSupported
+    }
+    
+    func removeModel(_ modelId: UUID) throws {
+        throw BackendError.operationNotSupported
+    }
+    
+    func updateModel(_ modelId: UUID, config: ModelConfiguration) throws {
+        throw BackendError.operationNotSupported
+    }
+    
+    func supportsModelAddition() -> Bool {
+        return false
+    }
+    
+    func supportsModelRemoval() -> Bool {
+        return false
+    }
+    
+    // MARK: - AIBackend Protocol - Operations
     
     func initialize() async throws {
-        await checkAvailability()
+        checkAvailabilitySync()
         
-        if !isAvailable {
+        guard modelStatus == .available else {
             throw BackendError.notAvailable
         }
     }
     
-    func checkAvailability() async -> Bool {
-        let model = SystemLanguageModel.default
-        
-        switch model.availability {
-        case .available:
-            self.isAvailable = true
-            self.modelStatus = .available
-            print("✅ Apple Intelligence is available")
-            return true
-            
-        case .unavailable(let reason):
-            self.isAvailable = false
-            switch reason {
-            case .deviceNotEligible:
-                self.modelStatus = .unavailable("Device not eligible for Apple Intelligence")
-            case .appleIntelligenceNotEnabled:
-                self.modelStatus = .unavailable("Apple Intelligence not enabled in Settings")
-            case .modelNotReady:
-                self.modelStatus = .downloading
-            @unknown default:
-                self.modelStatus = .unavailable("Apple Intelligence unavailable")
-            }
-            print("❌ Apple Intelligence unavailable: \(reason)")
-            return false
-        }
-    }
-    
-    func listModels() async throws -> [AIModel] {
-        var models: [AIModel] = []
-        
-        // Add Apple Intelligence as the primary on-device model if available
-        if isAvailable {
-            let appleModel = AIModel(
-                id: "apple-intelligence",
-                name: "Apple Intelligence",
-                backendId: id,
-                description: "On-device AI model",
-                capabilities: ModelCapabilities(
-                    supportsStreaming: true,
-                    supportsVision: false,
-                    supportsFunctionCalling: false,
-                    maxContextLength: 8192,
-                    maxOutputTokens: 2048
-                ),
-                metadata: ModelMetadata(
-                    size: nil,
-                    family: "Apple Foundation",
-                    version: "1.0"
-                )
-            )
-            models.append(appleModel)
-        }
-        
-        // List any downloaded models in the models directory
-        do {
-            let contents = try FileManager.default.contentsOfDirectory(
-                at: modelsDirectory,
-                includingPropertiesForKeys: [.fileSizeKey, .creationDateKey]
-            )
-            
-            let downloadedModels = contents.compactMap { url -> AIModel? in
-                guard let resources = try? url.resourceValues(forKeys: [.fileSizeKey]),
-                      let size = resources.fileSize else {
-                    return nil
-                }
-                
-                return AIModel(
-                    id: url.lastPathComponent,
-                    name: url.lastPathComponent,
-                    backendId: id,
-                    description: "Downloaded model",
-                    capabilities: .default,
-                    metadata: ModelMetadata(
-                        size: Int64(size)
-                    )
-                )
-            }
-            
-            models.append(contentsOf: downloadedModels)
-        } catch {
-            print("Error listing local models: \(error)")
-        }
-        
-        return models
-    }
-    
     func streamGenerate(
-        model: String,
+        modelId: UUID,
         prompt: String,
-        context: AIContext,
-        parameters: GenerationParameters
+        context: AIContext
     ) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
             Task { @MainActor in
-                guard isAvailable else {
+                guard modelId == defaultModelId else {
+                    continuation.finish(throwing: BackendError.modelNotFound)
+                    return
+                }
+                
+                guard SystemLanguageModel.default.availability == .available else {
                     continuation.finish(throwing: BackendError.notAvailable)
                     return
                 }
                 
-                // Get or create session for this chat to maintain context
-                guard let session = getSession(
-                    for: context.chatId,
-                    systemPrompt: context.systemPrompt
-                ) else {
+                // Get or create session for this chat
+                guard let session = getSession(for: context.chatId, systemPrompt: context.systemPrompt) else {
                     continuation.finish(throwing: BackendError.initializationFailed("Failed to create session"))
                     return
                 }
@@ -174,7 +144,7 @@ class AppleFoundationBackend: AIBackend, ObservableObject {
                     
                     var previousContent = ""
                     for try await part in stream {
-                        // Calculate delta by comparing with previous content
+                        // Calculate delta
                         let currentContent = part.content
                         if currentContent.hasPrefix(previousContent) {
                             let delta = String(currentContent.dropFirst(previousContent.count))
@@ -182,15 +152,13 @@ class AppleFoundationBackend: AIBackend, ObservableObject {
                                 continuation.yield(delta)
                             }
                         } else {
-                            // Fallback: yield the whole part if not incremental
+                            // Fallback: yield the whole part
                             continuation.yield(currentContent)
                         }
                         previousContent = currentContent
                     }
                     
                     continuation.finish()
-                    
-                    // Don't clear session - keep it for context
                 } catch {
                     continuation.finish(throwing: BackendError.generationFailed(error.localizedDescription))
                 }
@@ -199,10 +167,34 @@ class AppleFoundationBackend: AIBackend, ObservableObject {
     }
     
     func cleanup() async {
-        clearAllSessions()
+        sessions.removeAll()
     }
     
-    // MARK: - Session Management
+    // MARK: - Private Methods
+    
+    /// Check availability synchronously
+    private func checkAvailabilitySync() {
+        let model = SystemLanguageModel.default
+        
+        switch model.availability {
+        case .available:
+            modelStatus = .available
+            print("✅ Apple Intelligence is available")
+            
+        case .unavailable(let reason):
+            switch reason {
+            case .deviceNotEligible:
+                modelStatus = .unavailable("Device not eligible for Apple Intelligence")
+            case .appleIntelligenceNotEnabled:
+                modelStatus = .unavailable("Apple Intelligence not enabled in Settings")
+            case .modelNotReady:
+                modelStatus = .unavailable("Apple Intelligence model is downloading")
+            @unknown default:
+                modelStatus = .unavailable("Apple Intelligence unavailable")
+            }
+            print("❌ Apple Intelligence unavailable: \(reason)")
+        }
+    }
     
     /// Get or create a session for a chat
     private func getSession(for chatId: String, systemPrompt: String? = nil) -> LanguageModelSession? {
@@ -230,154 +222,49 @@ class AppleFoundationBackend: AIBackend, ObservableObject {
     func clearSession(for chatId: String) {
         sessions.removeValue(forKey: chatId)
     }
-    
-    /// Clear all sessions
-    func clearAllSessions() {
-        sessions.removeAll()
-    }
-    
-    // MARK: - Private Helpers
-    
-    /// Check if Apple's on-device model is available (synchronous)
-    private func checkAvailabilitySync() {
-        let model = SystemLanguageModel.default
-        
-        switch model.availability {
-        case .available:
-            self.isAvailable = true
-            self.modelStatus = .available
-            print("✅ Apple Intelligence is available")
-            
-        case .unavailable(let reason):
-            self.isAvailable = false
-            switch reason {
-            case .deviceNotEligible:
-                self.modelStatus = .unavailable("Device not eligible for Apple Intelligence")
-            case .appleIntelligenceNotEnabled:
-                self.modelStatus = .unavailable("Apple Intelligence not enabled in Settings")
-            case .modelNotReady:
-                self.modelStatus = .downloading
-            @unknown default:
-                self.modelStatus = .unavailable("Apple Intelligence unavailable")
-            }
-            print("❌ Apple Intelligence unavailable: \(reason)")
-        }
-    }
-    
-    private func createModelsDirectoryIfNeeded() {
-        if !FileManager.default.fileExists(atPath: modelsDirectory.path) {
-            try? FileManager.default.createDirectory(
-                at: modelsDirectory,
-                withIntermediateDirectories: true
-            )
-        }
-    }
-    
-    // MARK: - Model Status
-    
-    /// Get human-readable status message
-    func getStatusMessage() -> String {
-        switch modelStatus {
-        case .checking:
-            return "Checking Apple Intelligence availability..."
-        case .available:
-            return "Apple Intelligence is ready"
-        case .unavailable(let reason):
-            return reason
-        case .downloading:
-            return "Apple Intelligence model is downloading. Please check back later."
-        case .disabled:
-            return "Apple Intelligence is disabled. Enable it in Settings > Apple Intelligence & Siri."
-        }
-    }
 }
 
-// MARK: - AppleFoundationSettings
-
+/// Settings for Apple Foundation backend (empty as it has no configurable settings)
 struct AppleFoundationSettings: AIBackendSettings {
-    var backendId: String = "apple-foundation"
+    let backendId = "apple-foundation"
     
-    // Apple Intelligence has minimal settings (mostly automatic)
-    var keepSessionsInMemory: Bool = true
-    var maxConcurrentSessions: Int = 5
+    mutating func resetToDefaults() {
+        // No settings to reset
+    }
     
     func settingsView() -> AnyView {
-        AnyView(AppleFoundationSettingsView(settings: self))
+        AnyView(
+            VStack(spacing: 16) {
+                Image(systemName: "apple.logo")
+                    .font(.system(size: 48))
+                    .foregroundColor(.blue)
+                
+                Text("Apple Intelligence")
+                    .font(.title2)
+                    .fontWeight(.semibold)
+                
+                Text("On-device AI powered by Apple's Foundation Models. Private, secure, and no configuration required.")
+                    .font(.body)
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal)
+                
+                if #available(iOS 26.0, *) {
+                    let status = SystemLanguageModel.default.availability
+                    if case .available = status {
+                        Label("Ready to use", systemImage: "checkmark.circle.fill")
+                            .foregroundColor(.green)
+                    } else {
+                        Label("Enable Apple Intelligence in Settings", systemImage: "info.circle")
+                            .foregroundColor(.orange)
+                    }
+                }
+            }
+            .padding()
+        )
     }
     
     func validate() -> Result<Void, SettingsError> {
-        // Validate max concurrent sessions
-        if maxConcurrentSessions < 1 || maxConcurrentSessions > 20 {
-            return .failure(.invalidValue(field: "maxConcurrentSessions", reason: "Must be between 1 and 20"))
-        }
-        
         return .success(())
     }
-    
-    mutating func resetToDefaults() {
-        keepSessionsInMemory = true
-        maxConcurrentSessions = 5
-    }
 }
-
-// MARK: - AppleFoundationSettingsView
-
-struct AppleFoundationSettingsView: View {
-    @State var settings: AppleFoundationSettings
-    @Environment(\.dismiss) private var dismiss
-    
-    var body: some View {
-        Form {
-            Section {
-                Text("Apple Intelligence runs on-device and requires no configuration. Your data stays private and secure on your iPhone.")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            } header: {
-                Label("About", systemImage: "info.circle")
-            }
-            
-            Section {
-                Toggle("Keep Sessions in Memory", isOn: $settings.keepSessionsInMemory)
-                
-                Stepper(
-                    "Max Concurrent Sessions: \(settings.maxConcurrentSessions)",
-                    value: $settings.maxConcurrentSessions,
-                    in: 1...20
-                )
-            } header: {
-                Label("Performance", systemImage: "gauge.with.dots.needle.67percent")
-            } footer: {
-                Text("Keeping sessions in memory maintains conversation context but uses more RAM. Max concurrent sessions limits how many active conversations can run simultaneously.")
-            }
-            
-            Section {
-                Button("Reset to Defaults") {
-                    settings.resetToDefaults()
-                }
-                .foregroundStyle(.red)
-            }
-            
-            Section {
-                Button("Save") {
-                    saveSettings()
-                }
-                .frame(maxWidth: .infinity)
-                .fontWeight(.semibold)
-            }
-        }
-        .navigationTitle("Apple Intelligence Settings")
-        .navigationBarTitleDisplayMode(.inline)
-    }
-    
-    private func saveSettings() {
-        do {
-            try BackendSettingsManager.shared.saveSettings(settings)
-            dismiss()
-        } catch {
-            print("Failed to save settings: \(error)")
-        }
-    }
-}
-
-// Note: MLXService compatibility wrapper is kept in the original MLXService.swift file
-// to avoid breaking existing code that imports it directly

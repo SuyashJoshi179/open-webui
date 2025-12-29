@@ -11,10 +11,12 @@ struct NewChatView: View {
     @Environment(\.dismiss) var dismiss
     @EnvironmentObject var chatStorage: ChatStorage
     @StateObject private var viewModel = NewChatViewModel()
+    @StateObject private var backendManager = BackendManager.shared
     
     @State private var title = ""
     @State private var selectedModelIds: Set<String> = []
     @State private var systemPrompt = ""
+    @State private var showingBackendSettings = false
     
     var body: some View {
         NavigationStack {
@@ -25,52 +27,56 @@ struct NewChatView: View {
                 
                 Section("Select Models") {
                     if viewModel.isLoadingModels {
-                        ProgressView()
-                    } else if viewModel.availableLocalModels.isEmpty && viewModel.availableCloudModels.isEmpty {
+                        ProgressView("Loading models...")
+                    } else if viewModel.availableModels.isEmpty {
                         VStack(alignment: .center, spacing: 12) {
                             Image(systemName: "cube.transparent")
                                 .font(.largeTitle)
                                 .foregroundStyle(.secondary)
                             Text("No Models Available")
                                 .font(.headline)
-                            Text("Configure an external API in Settings to use cloud models")
+                            Text("Configure backends in Settings to enable models")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                                 .multilineTextAlignment(.center)
+                            
+                            Button(action: { showingBackendSettings = true }) {
+                                Label("Configure Backends", systemImage: "gearshape")
+                            }
+                            .buttonStyle(.borderedProminent)
                         }
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 20)
                     } else {
-                        // Local models (Apple Intelligence)
-                        if !viewModel.availableLocalModels.isEmpty {
-                            ForEach(viewModel.availableLocalModels) { model in
-                                MultipleSelectionRow(
-                                    title: model.name,
-                                    subtitle: "On-Device",
-                                    isSelected: selectedModelIds.contains(model.id)
-                                ) {
-                                    if selectedModelIds.contains(model.id) {
-                                        selectedModelIds.remove(model.id)
-                                    } else {
-                                        selectedModelIds.insert(model.id)
-                                    }
+                        // Show active model
+                        if let activeModel = backendManager.activeModel {
+                            HStack {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundStyle(.green)
+                                    .font(.caption)
+                                Text("Using: \(activeModel.displayName)")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                Spacer()
+                                Button("Change") {
+                                    showingBackendSettings = true
                                 }
+                                .font(.caption)
                             }
+                            .padding(.vertical, 4)
                         }
                         
-                        // Cloud models
-                        if !viewModel.availableCloudModels.isEmpty {
-                            ForEach(viewModel.availableCloudModels) { model in
-                                MultipleSelectionRow(
-                                    title: model.name,
-                                    subtitle: "Cloud",
-                                    isSelected: selectedModelIds.contains(model.id)
-                                ) {
-                                    if selectedModelIds.contains(model.id) {
-                                        selectedModelIds.remove(model.id)
-                                    } else {
-                                        selectedModelIds.insert(model.id)
-                                    }
+                        // Group models by backend
+                        ForEach(viewModel.availableModels) { model in
+                            MultipleSelectionRow(
+                                title: model.displayName,
+                                subtitle: model.modelIdentifier,
+                                isSelected: selectedModelIds.contains(model.id.uuidString)
+                            ) {
+                                if selectedModelIds.contains(model.id.uuidString) {
+                                    selectedModelIds.remove(model.id.uuidString)
+                                } else {
+                                    selectedModelIds.insert(model.id.uuidString)
                                 }
                             }
                         }
@@ -100,7 +106,24 @@ struct NewChatView: View {
                     .disabled(title.isEmpty || selectedModelIds.isEmpty)
                 }
             }
+            .sheet(isPresented: $showingBackendSettings) {
+                NavigationStack {
+                    BackendSelectionView()
+                }
+            }
             .onAppear {
+                Task {
+                    await viewModel.loadModels()
+                }
+            }
+            .onChange(of: backendManager.allModels.count) { _, _ in
+                Task {
+                    await viewModel.loadModels()
+                    // Clear selection if models changed
+                    selectedModelIds.removeAll()
+                }
+            }
+            .onChange(of: backendManager.activeModel?.id) { _, _ in
                 Task {
                     await viewModel.loadModels()
                 }
@@ -156,36 +179,16 @@ struct MultipleSelectionRow: View {
 
 @MainActor
 class NewChatViewModel: ObservableObject {
-    @Published var availableLocalModels: [LocalModel] = []
-    @Published var availableCloudModels: [Model] = []
+    @Published var availableModels: [ConfiguredAIModel] = []
     @Published var isLoadingModels = false
     
-    @AppStorage("externalAPIURL") private var externalAPIURL = ""
-    @AppStorage("externalAPIKey") private var externalAPIKey = ""
-    
-    private let apiClient = APIClient.shared
-    private let openAIService = OpenAIService.shared
+    private let backendManager = BackendManager.shared
     
     func loadModels() async {
         isLoadingModels = true
         
-        // Load local models (Apple Intelligence)
-        if #available(iOS 26.0, *) {
-            let mlxService = MLXService.shared
-            availableLocalModels = mlxService.listLocalModels()
-        }
-        
-        // Only load cloud models if user has configured an external API
-        if !externalAPIURL.isEmpty && !externalAPIURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            do {
-                availableCloudModels = try await openAIService.listModels()
-            } catch {
-                print("Error loading cloud models: \(error)")
-                availableCloudModels = []
-            }
-        } else {
-            availableCloudModels = []
-        }
+        // Load all available models from all backends
+        availableModels = backendManager.allModels
         
         isLoadingModels = false
     }

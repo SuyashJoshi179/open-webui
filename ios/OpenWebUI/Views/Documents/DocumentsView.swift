@@ -16,7 +16,9 @@ struct DocumentsView: View {
         NavigationStack {
             Group {
                 if viewModel.isLoading {
-                    ProgressView()
+                    ProgressView("Loading documents...")
+                } else if let errorMessage = viewModel.errorMessage {
+                    errorStateView(errorMessage)
                 } else if viewModel.documents.isEmpty {
                     emptyState
                 } else {
@@ -29,6 +31,7 @@ struct DocumentsView: View {
                     Button(action: { showingFilePicker = true }) {
                         Image(systemName: "plus")
                     }
+                    .disabled(viewModel.errorMessage != nil)
                 }
             }
             .fileImporter(
@@ -44,6 +47,33 @@ struct DocumentsView: View {
                 }
             }
         }
+    }
+    
+    private func errorStateView(_ message: String) -> some View {
+        VStack(spacing: 20) {
+            Image(systemName: "exclamationmark.triangle")
+                .font(.system(size: 60))
+                .foregroundStyle(.orange)
+            
+            Text("Backend Not Available")
+                .font(.headline)
+            
+            Text(message)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal)
+            
+            Button(action: {
+                Task {
+                    await viewModel.loadDocuments()
+                }
+            }) {
+                Label("Retry", systemImage: "arrow.clockwise")
+            }
+            .buttonStyle(.borderedProminent)
+        }
+        .padding()
     }
     
     private var emptyState: some View {
@@ -137,11 +167,14 @@ class DocumentsViewModel: ObservableObject {
     
     func loadDocuments() async {
         isLoading = true
+        errorMessage = nil
         
         do {
             documents = try await ragService.listDocuments()
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage = "Failed to load documents: \(error.localizedDescription)"
+            print("⚠️ Failed to load documents: \(error.localizedDescription)")
+            documents = []
         }
         
         isLoading = false
@@ -149,12 +182,11 @@ class DocumentsViewModel: ObservableObject {
     
     func uploadDocument(url: URL) async {
         do {
-            // Start accessing security-scoped resource
             let _ = url.startAccessingSecurityScopedResource()
             defer { url.stopAccessingSecurityScopedResource() }
             
-            let document = try await ragService.uploadDocument(fileURL: url)
-            documents.insert(document, at: 0)
+            try await ragService.uploadDocument(url)
+            await loadDocuments()
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -164,7 +196,7 @@ class DocumentsViewModel: ObservableObject {
         for index in offsets {
             let document = documents[index]
             do {
-                try await ragService.deleteDocument(id: document.id)
+                try await ragService.deleteDocument(document.id)
                 documents.remove(at: index)
             } catch {
                 errorMessage = error.localizedDescription

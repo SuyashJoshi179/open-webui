@@ -1,356 +1,410 @@
-# OpenWebUI iOS - Multi-Backend Architecture Design
+# Open WebUI iOS - Design Document
 
-## 🎯 Design Summary
+## Overview
 
-This architecture follows **SOLID principles** and uses **Protocol-Oriented Programming** to create a flexible, maintainable, and extensible AI backend system.
+Open WebUI iOS is a native iOS application that provides a ChatGPT-like interface with support for multiple AI backends. The app follows a **model-centric architecture** where users interact with AI models rather than backends directly.
 
-## 📐 Architecture Overview
+## Architecture Philosophy
+
+### Model-Centric Design
+
+Unlike traditional approaches where users select backends (OpenAI, Ollama, etc.), Open WebUI iOS adopts a model-centric approach:
+
+- **Users select models**, not backends
+- **Backends provide models** as their primary responsibility
+- **Models encapsulate configuration** (API endpoints, keys, parameters)
+- **BackendManager aggregates** all models from all backends
+
+### Key Principles
+
+1. **Single Responsibility**: Each component has one clear purpose
+2. **Protocol-Oriented**: Behaviors defined through protocols for flexibility
+3. **SwiftUI Native**: Modern SwiftUI patterns throughout
+4. **Reactive**: @Published properties and Combine for state management
+5. **Privacy-First**: On-device processing where possible (Apple Intelligence)
+
+## Core Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                         UI Layer                                 │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐          │
-│  │  ChatView    │  │SettingsView  │  │  ModelsView  │          │
-│  │ (SwiftUI)    │  │  (SwiftUI)   │  │  (SwiftUI)   │          │
-│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘          │
-└─────────┼──────────────────┼──────────────────┼─────────────────┘
-          │                  │                  │
-          ▼                  ▼                  ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                     ViewModel Layer                              │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐          │
-│  │ChatViewModel │  │SettingsVM    │  │  ModelsVM    │          │
-│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘          │
-│         │                  │                  │                   │
-│         └──────────────────┼──────────────────┘                  │
-└───────────────────────────┼─────────────────────────────────────┘
-                            │
-                            ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                   Backend Manager (Singleton)                    │
-│  ┌─────────────────────────────────────────────────────────┐   │
-│  │  • Backend Registry                                      │   │
-│  │  • Active Backend Management                             │   │
-│  │  • Lifecycle Coordination                                │   │
-│  │  • Settings Persistence                                  │   │
-│  └─────────────────────────────────────────────────────────┘   │
-└───────────────────────────────┬─────────────────────────────────┘
-                                │
-                ┌───────────────┼───────────────┐
-                │               │               │
-                ▼               ▼               ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      AIBackend Protocol                          │
-│  ┌──────────────────────────────────────────────────────────┐  │
-│  │  • id: String                                             │  │
-│  │  • name: String                                           │  │
-│  │  • isAvailable: Bool                                      │  │
-│  │  • settings: AIBackendSettings                            │  │
-│  │  • initialize() async throws                              │  │
-│  │  • listModels() async -> [AIModel]                        │  │
-│  │  • streamGenerate(...) -> AsyncThrowingStream            │  │
-│  └──────────────────────────────────────────────────────────┘  │
-└───────────────────────────────┬─────────────────────────────────┘
-                                │
-        ┌───────────────────────┼───────────────────────┐
-        │                       │                       │
-        ▼                       ▼                       ▼
-┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐
-│ Apple Foundation │  │ OpenAI Compatible│  │   Llama.cpp      │
-│     Backend      │  │     Backend      │  │    Backend       │
-│                  │  │                  │  │                  │
-│ • iOS 26+        │  │ • Cloud API      │  │ • Local GGUF    │
-│ • On-device      │  │ • HTTP Requests  │  │ • CPU/GPU       │
-│ • Private        │  │ • Any OpenAI API │  │ • Quantized     │
-│ • No API key     │  │ • Streaming      │  │ • Fast          │
-└──────────────────┘  └──────────────────┘  └──────────────────┘
-        │                       │                       │
-        ▼                       ▼                       ▼
-┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐
-│Foundation Models │  │  OpenAI API      │  │  llama.cpp lib   │
-│   (System)       │  │  (Network)       │  │   (Embedded)     │
-└──────────────────┘  └──────────────────┘  └──────────────────┘
+┌─────────────────────────────────────────────────────────┐
+│                        UI Layer                          │
+│  ┌─────────┐  ┌─────────┐  ┌──────────┐  ┌──────────┐ │
+│  │ ChatView│  │ModelsView│  │ Settings │  │NewChatView│ │
+│  └────┬────┘  └────┬────┘  └─────┬────┘  └────┬─────┘ │
+└───────┼───────────┼──────────────┼────────────┼────────┘
+        │           │              │            │
+        └───────────┴──────────────┴────────────┘
+                           ▼
+        ┌─────────────────────────────────────┐
+        │       BackendManager (Singleton)     │
+        │  • Aggregates all models             │
+        │  • Manages active model selection    │
+        │  • Routes generation requests        │
+        └──────────────┬──────────────────────┘
+                       │
+         ┌─────────────┴─────────────┐
+         │                           │
+         ▼                           ▼
+┌────────────────┐         ┌────────────────┐
+│  AIBackend     │         │  AIBackend     │
+│  (Protocol)    │         │  (Protocol)    │
+└────────────────┘         └────────────────┘
+         │                           │
+         ▼                           ▼
+┌────────────────┐         ┌────────────────┐
+│ AppleFoundation│         │OpenAICompatible│
+│   Backend      │         │    Backend     │
+│                │         │                │
+│ • Fixed Model  │         │ • Dynamic      │
+│ • On-device    │         │ • User-config  │
+└────────────────┘         └────────────────┘
 ```
 
-## 🔑 SOLID Principles Applied
+## Component Details
 
-### 1️⃣ Single Responsibility Principle (SRP)
-```
-✅ Each backend handles ONLY its specific AI provider
-✅ BackendManager handles ONLY backend coordination
-✅ Settings classes handle ONLY configuration
-✅ Views handle ONLY presentation
-```
+### 1. BackendManager
 
-**Example:**
+**Purpose**: Central hub for model management and request routing
+
+**Responsibilities**:
+- Register and discover backends automatically
+- Aggregate models from all backends
+- Manage active model selection
+- Route generation requests to appropriate backend
+- Notify views of model changes
+
+**Key Properties**:
 ```swift
-// ❌ BAD - MLXService doing too much
-class MLXService {
-    func generate() { }
-    func chat() { }
-    func summarize() { }
-    func createEmbedding() { }
-    func saveSettings() { }      // ← Settings responsibility
-    func loadSettings() { }      // ← Settings responsibility
-    func manageModels() { }      // ← Model management responsibility
-}
-
-// ✅ GOOD - Single responsibility
-class AppleFoundationBackend: AIBackend {
-    func initialize() { }
-    func listModels() { }
-    func streamGenerate() { }
-    // Only AI generation responsibilities
-}
-
-class AppleFoundationSettings: AIBackendSettings {
-    // Only settings responsibilities
-}
+@Published var allModels: [ConfiguredAIModel]
+@Published var activeModel: ConfiguredAIModel?
+var backends: [any AIBackend]
 ```
 
-### 2️⃣ Open/Closed Principle (OCP)
-```
-✅ Open for extension (new backends)
-✅ Closed for modification (existing code unchanged)
-```
+**Pattern**: Singleton with auto-discovery
 
-**Example:**
+### 2. AIBackend Protocol
+
+**Purpose**: Define contract for backend implementations
+
+**Core Methods**:
 ```swift
-// ✅ Add new backend WITHOUT modifying existing code
-class CustomBackend: AIBackend {
-    // Implement protocol
-    // No changes needed to BackendManager, ViewModels, or Views!
-}
-
-// Register it
-BackendManager.shared.registerBackend(CustomBackend())
+func getConfiguredModels() -> [ConfiguredAIModel]
+func addModel(_ config: ModelConfiguration) throws -> ConfiguredAIModel
+func removeModel(_ modelId: UUID) throws
+func updateModel(_ modelId: UUID, config: ModelConfiguration) throws
+func streamGenerate(modelId: UUID, prompt: String, context: AIContext) 
+    -> AsyncThrowingStream<String, Error>
+func supportsModelAddition() -> Bool
+func supportsModelRemoval() -> Bool
 ```
 
-### 3️⃣ Liskov Substitution Principle (LSP)
-```
-✅ Any AIBackend can replace another
-✅ App works correctly with any backend
-```
-
-**Example:**
+**Auto-Registration**:
 ```swift
-// ✅ Works with ANY backend implementation
-func sendMessage(backend: AIBackend) async {
-    let stream = backend.streamGenerate(...)
-    for try await chunk in stream {
-        // Works regardless of which backend is used
+static let autoRegister: Void = {
+    BackendManager.registerBackendFactory {
+        MyBackend()
     }
-}
+}()
 ```
 
-### 4️⃣ Interface Segregation Principle (ISP)
-```
-✅ Protocols are minimal and focused
-✅ Backends only implement what they need
-```
+### 3. ConfiguredAIModel
 
-**Example:**
+**Purpose**: Represent a user-facing model instance
+
+**Structure**:
 ```swift
-// ✅ Core protocol - minimal required methods
-protocol AIBackend {
-    var id: String { get }
-    var isAvailable: Bool { get }
-    func streamGenerate(...) -> AsyncThrowingStream<String, Error>
+struct ConfiguredAIModel {
+    let id: UUID
+    let backendId: String
+    var displayName: String
+    let modelIdentifier: String
+    var configuration: ModelConfiguration
+    let capabilities: ModelCapabilities
 }
-
-// ✅ Optional capabilities - separate protocol
-protocol AIBackendCapabilities {
-    var supportsEmbeddings: Bool { get }
-    var supportsVision: Bool { get }
-}
-
-// Backends implement only what they support
 ```
 
-### 5️⃣ Dependency Inversion Principle (DIP)
+**Key Concept**: Each model is independent with its own configuration, even if multiple models use the same backend.
+
+### 4. Backend Implementations
+
+#### Apple Foundation Backend
+- **Type**: Fixed model backend
+- **Model Count**: 1 (system-provided)
+- **User Actions**: Cannot add/remove models
+- **Features**: On-device processing, privacy-first
+- **Availability**: iOS 18.2+ with Apple Intelligence
+
+#### OpenAI Compatible Backend
+- **Type**: Dynamic model backend
+- **Model Count**: Unlimited (user-configured)
+- **User Actions**: Add/remove/update models
+- **Configuration**: API URL, API key, organization ID
+- **Persistence**: UserDefaults (JSON)
+- **Use Cases**: OpenAI, Ollama, Groq, any OpenAI-compatible API
+
+#### Llama.cpp Backend (Stub)
+- **Type**: Local model backend
+- **Planned Features**: GGUF model support
+- **Status**: Interface defined, implementation pending
+
+#### LiteRT Backend (Stub)
+- **Type**: Local model backend
+- **Planned Features**: TensorFlow Lite models
+- **Status**: Interface defined, implementation pending
+
+## Data Flow
+
+### Model Selection Flow
 ```
-✅ High-level (ViewModels) depend on abstractions (AIBackend protocol)
-✅ Low-level (concrete backends) implement abstractions
-✅ Not the other way around
+User taps model → BackendManager.selectModel() → 
+activeModel updated → UI updates via @Published
 ```
 
-**Example:**
+### Chat Generation Flow
+```
+User sends message → ChatViewModel.sendMessage() →
+BackendManager.streamGenerate() →
+Finds backend via model.backendId →
+Backend.streamGenerate() →
+Stream chunks back to UI
+```
+
+### Model Addition Flow
+```
+User opens Settings → Selects backend → Taps "Add Model" →
+Fills configuration form → Backend.addModel() →
+Backend persists + returns model →
+BackendManager.refreshModels() →
+Model appears in Models page
+```
+
+## UI Architecture
+
+### View Organization
+
+```
+ContentView
+├── TabView
+│   ├── ChatsListView
+│   │   └── ChatView (per chat)
+│   │       ├── MessageView
+│   │       ├── TypingIndicatorView
+│   │       └── PerformanceInsightsView
+│   │
+│   ├── ModelsView
+│   │   └── ModelRowWithBackend
+│   │
+│   └── SettingsView
+│       ├── BackendSelectionView
+│       │   ├── BackendRowWithModels
+│       │   └── AddModelView
+│       └── Other settings...
+│
+└── NewChatView (sheet)
+```
+
+### State Management
+
+**Pattern**: MVVM with ObservableObject
+
+**View Models**:
+- `ChatViewModel`: Manages chat state and message generation
+- `ChatsListViewModel`: Manages chat list
+- `NewChatViewModel`: Handles new chat creation
+
+**Shared State**:
+- `BackendManager.shared`: Global model state
+- `ChatStorage.shared`: Persistent chat storage
+
+## Persistence
+
+### Chat Storage
+- **Location**: UserDefaults
+- **Format**: JSON
+- **Key**: `"chats"` and `"messages_{chatId}"`
+- **Scope**: Per-device
+
+### Model Configuration
+- **Location**: UserDefaults (per backend)
+- **Format**: JSON (Codable)
+- **Key**: `"openai_compatible_models"` (example)
+- **Restoration**: Automatic on backend initialization
+
+## Design Patterns
+
+### 1. Auto-Discovery Pattern
+
+Backends register themselves automatically when their class is loaded:
+
 ```swift
-// ✅ ViewModel depends on ABSTRACTION
-class ChatViewModel {
-    let backendManager: BackendManager  // ← Abstraction layer
-    
-    func sendMessage() async {
-        // Uses AIBackend protocol, not concrete implementation
-        let backend: AIBackend? = backendManager.activeBackend
-    }
-}
-
-// ✅ Concrete implementation depends on protocol
-class AppleFoundationBackend: AIBackend {  // ← Implements abstraction
-    // Implementation details
-}
+static let autoRegister: Void = {
+    BackendManager.registerBackendFactory { MyBackend() }
+}()
 ```
 
-## 🎨 Design Patterns Used
+No manual registration needed - just add the backend file to the project.
 
-### 1. Protocol-Oriented Programming
+### 2. Protocol Extension Pattern
+
+Default implementations for optional protocol methods:
+
 ```swift
-protocol AIBackend {
-    // Interface definition
-}
-
-// All backends conform to same interface
-class AppleFoundationBackend: AIBackend { }
-class OpenAICompatibleBackend: AIBackend { }
-class LlamaCppBackend: AIBackend { }
-```
-
-### 2. Singleton Pattern
-```swift
-class BackendManager {
-    static let shared = BackendManager()
-    private init() { }  // Prevent multiple instances
+extension AIBackend {
+    func supportsModelAddition() -> Bool { false }
+    func supportsModelRemoval() -> Bool { false }
 }
 ```
 
-### 3. Registry Pattern
+### 3. Computed Property Pattern
+
+Backend reference computed at runtime:
+
 ```swift
-class BackendManager {
-    private var backendRegistry: [String: AIBackend] = [:]
-    
-    func registerBackend(_ backend: AIBackend) {
-        backendRegistry[backend.id] = backend
-    }
+var backend: AIBackend? {
+    BackendManager.shared.getBackend(id: backendId)
 }
 ```
 
-### 4. Strategy Pattern
+### 4. Publisher Pattern
+
+Using Combine for reactive updates:
+
 ```swift
-// Different backends = different strategies
-let backend = backendManager.activeBackend
-let stream = backend.streamGenerate(...)  // Strategy determines behavior
+@Published var allModels: [ConfiguredAIModel] = []
+objectWillChange.send() // Trigger UI update
 ```
 
-### 5. Factory Pattern (Implicit)
+## User Experience Flow
+
+### First Launch
+1. App opens to empty chat list
+2. Welcome chat created automatically
+3. Apple Intelligence model available (if supported)
+4. User can add more models via Settings
+
+### Adding a Model
+1. Settings → Backends → Expand backend → "Add Model"
+2. Fill form (display name, model ID, API URL, key)
+3. Save → Model persists
+4. Model appears in Models page
+5. Can now select for chat
+
+### Starting a Chat
+1. Tap "+" to create new chat
+2. Select model from list (all backends shown)
+3. Optional: Add system prompt
+4. Model selection saved with chat
+5. Start conversation
+
+### Switching Models
+1. Go to Models page
+2. Tap any model
+3. Model becomes active
+4. Used for new messages in all chats
+
+## Error Handling
+
+### Backend Errors
 ```swift
-// BackendManager acts as factory
-func getBackend(id: String) -> AIBackend? {
-    return backendRegistry[id]
+enum BackendError: LocalizedError {
+    case notInitialized
+    case notAvailable
+    case modelNotFound
+    case invalidConfiguration(String)
+    case operationNotSupported
 }
 ```
 
-## 📊 Data Flow
+### User-Facing Messages
+- Configuration errors: Show alert with specific issue
+- Network errors: Show retry option
+- Model unavailable: Suggest checking settings
 
-```
-User Input
-    │
-    ▼
-[ChatView]
-    │
-    ▼
-[ChatViewModel]
-    │
-    ├─→ Get active backend ──→ [BackendManager]
-    │                                │
-    │                                ▼
-    │                          [AIBackend Protocol]
-    │                                │
-    │                          ┌─────┴─────┐
-    │                          ▼           ▼
-    │                    [Apple Backend] [OpenAI Backend]
-    │                          │           │
-    │                          ▼           ▼
-    └─← Response stream ──────┴───────────┘
-         (AsyncThrowingStream<String>)
-```
+## Performance Considerations
 
-## 🔐 Settings Architecture
+### Lazy Loading
+- Messages loaded on-demand per chat
+- Models loaded once at startup
+- Streaming reduces memory for long responses
 
-```
-┌────────────────────────────────────────────────────────┐
-│              AIBackendSettings Protocol                 │
-│  • backendId: String                                    │
-│  • settingsView() -> AnyView                           │
-│  • validate() -> Result<Void, SettingsError>           │
-└────────────────────┬───────────────────────────────────┘
-                     │
-         ┌───────────┼───────────┐
-         ▼           ▼           ▼
-┌──────────────┐ ┌──────────┐ ┌──────────────┐
-│ Apple        │ │ OpenAI   │ │ Llama.cpp    │
-│ Settings     │ │ Settings │ │ Settings     │
-│              │ │          │ │              │
-│ (minimal)    │ │ • apiURL │ │ • modelPath  │
-│              │ │ • apiKey │ │ • threads    │
-│              │ │ • orgId  │ │ • gpuLayers  │
-└──────────────┘ └──────────┘ └──────────────┘
-```
+### Memory Management
+- Weak references where appropriate
+- Dispose of streams properly
+- Clear old messages when needed
 
-## 🧪 Testing Strategy
+### Responsiveness
+- Async/await for all network operations
+- Main actor isolation for UI updates
+- Background processing for large operations
+
+## Security & Privacy
+
+### API Keys
+- Stored in UserDefaults (encrypted by iOS)
+- Never logged or printed
+- Cleared when model removed
+
+### On-Device Processing
+- Apple Intelligence runs 100% on-device
+- No data sent to Apple servers
+- Chat history stays local
+
+### Data Storage
+- All data in app sandbox
+- Removed when app deleted
+- No iCloud sync (yet)
+
+## Future Considerations
+
+### Planned Features
+1. **Llama.cpp Integration**: Local GGUF model support
+2. **LiteRT Integration**: TensorFlow Lite models
+3. **RAG Support**: Document-based context
+4. **Function Calling**: Tool use support
+5. **Vision Models**: Image input support
+6. **iCloud Sync**: Cross-device chat history
+
+### Extensibility Points
+- New backends: Implement `AIBackend` protocol
+- New model types: Extend `ModelCapabilities`
+- Custom storage: Replace `ChatStorage`
+- Plugin system: Future dynamic loading
+
+## Testing Strategy
 
 ### Unit Tests
-```
-BackendTests/
-├── AIBackendProtocolTests.swift       # Protocol conformance
-├── BackendManagerTests.swift          # Manager functionality
-├── AppleFoundationBackendTests.swift  # Specific backend
-├── OpenAICompatibleBackendTests.swift # Specific backend
-└── SettingsPersistenceTests.swift     # Settings storage
-```
+- Backend functionality
+- Model management
+- Configuration persistence
 
 ### Integration Tests
-```
-IntegrationTests/
-├── ChatFlowTests.swift              # End-to-end chat
-├── BackendSwitchingTests.swift      # Runtime switching
-└── SettingsMigrationTests.swift     # Settings upgrades
-```
+- End-to-end chat flow
+- Model switching
+- Error scenarios
 
-## 📈 Benefits
+### UI Tests
+- Navigation flows
+- Form validation
+- Settings changes
 
-| Benefit | Description |
-|---------|-------------|
-| **Maintainability** | Clear separation of concerns, easy to understand |
-| **Extensibility** | Add new backends without touching existing code |
-| **Testability** | Each component tested independently |
-| **Flexibility** | Switch backends at runtime |
-| **Type Safety** | Compile-time error checking via protocols |
-| **Reusability** | Common interfaces reduce duplication |
-| **Scalability** | Easy to add features to all backends |
+## Code Style
 
-## 🎯 Key Decisions
+### Swift Conventions
+- Swift 6 language mode
+- Strict concurrency checking
+- Actor isolation where appropriate
+- Protocol-oriented design
 
-### Why Protocol-Oriented?
-- Swift's protocols are powerful and flexible
-- Better than class inheritance for this use case
-- Allows value types and reference types
-- Easier testing with protocol mocks
+### Naming
+- Clear, descriptive names
+- Avoid abbreviations
+- Consistent terminology
 
-### Why Singleton for BackendManager?
-- Single source of truth for active backend
-- Centralized lifecycle management
-- Easy access from anywhere in app
-- Prevents multiple backend states
+### Documentation
+- DocC comments for public APIs
+- Inline comments for complex logic
+- Architecture docs (this file)
 
-### Why Async Streams?
-- Native Swift concurrency
-- Efficient memory usage
-- Clean cancellation handling
-- Easy to compose and transform
+## Conclusion
 
-### Why Settings as Protocol?
-- Each backend has different needs
-- Type-safe configuration
-- Easy validation
-- Flexible UI generation
-
-## 📚 Resources
-
-- [ARCHITECTURE.md](ARCHITECTURE.md) - Detailed architecture
-- [MIGRATION.md](MIGRATION.md) - Migration guide
-- [IMPLEMENTATION_CHECKLIST.md](IMPLEMENTATION_CHECKLIST.md) - Task list
-
----
-
-**Ready to implement?** Start with [MIGRATION.md](MIGRATION.md) Phase 1!
+Open WebUI iOS is built on a flexible, extensible architecture that prioritizes user experience and privacy. The model-centric design makes it easy to work with multiple AI services while maintaining a clean, intuitive interface. The protocol-based backend system allows for easy addition of new AI providers without modifying existing code.

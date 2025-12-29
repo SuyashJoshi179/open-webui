@@ -9,9 +9,7 @@ import SwiftUI
 
 struct SettingsView: View {
     @EnvironmentObject var authService: AuthService
-    @AppStorage("backendURL") private var backendURL = AppConfig.backendURL
-    @AppStorage("externalAPIURL") private var externalAPIURL = ""
-    @AppStorage("externalAPIKey") private var externalAPIKey = ""
+    // Backend URL removed - app is fully self-contained with local backends
     @AppStorage("enableOfflineMode") private var enableOfflineMode = false
     @AppStorage("defaultTemperature") private var defaultTemperature = 0.7
     @AppStorage("defaultMaxTokens") private var defaultMaxTokens = 2048
@@ -42,39 +40,15 @@ struct SettingsView: View {
                     }
                 }
                 
-                // Connection Section
-                Section("Connection") {
-                    TextField("Backend URL (Optional)", text: $backendURL)
-                        #if os(iOS)
-                        .textInputAutocapitalization(.never)
-                        .keyboardType(.URL)
-                        #endif
-                    
-                    Toggle("Offline Mode", isOn: $enableOfflineMode)
-                }
-                
-                // External API Configuration
+                // AI Backends Section
                 Section {
-                    TextField("API URL", text: $externalAPIURL, prompt: Text("https://api.openai.com/v1"))
-                        #if os(iOS)
-                        .textInputAutocapitalization(.never)
-                        .keyboardType(.URL)
-                        #endif
-                    
-                    SecureField("API Key", text: $externalAPIKey, prompt: Text("sk-..."))
-                        #if os(iOS)
-                        .textInputAutocapitalization(.never)
-                        #endif
-                    
-                    if !externalAPIURL.isEmpty {
-                        Button("Test Connection") {
-                            testAPIConnection()
-                        }
+                    NavigationLink(destination: BackendSelectionView()) {
+                        Label("Manage AI Backends", systemImage: "cpu")
                     }
                 } header: {
-                    Text("External API (Optional)")
+                    Text("AI Backends")
                 } footer: {
-                    Text("Configure an OpenAI-compatible API endpoint to use cloud models. Leave empty to use only Apple Intelligence.")
+                    Text("Configure multiple AI backends including Apple Intelligence, OpenAI-compatible APIs, llama.cpp, and TensorFlow Lite.")
                 }
                 
                 // Model Settings
@@ -140,20 +114,6 @@ struct SettingsView: View {
     private func clearCache() {
         URLCache.shared.removeAllCachedResponses()
         // Additional cleanup can be added here
-    }
-    
-    private func testAPIConnection() {
-        // Test API connection
-        Task {
-            do {
-                let service = OpenAIService.shared
-                _ = try await service.listModels()
-                // Show success message
-            } catch {
-                // Show error message
-                print("API connection test failed: \(error)")
-            }
-        }
     }
 }
 

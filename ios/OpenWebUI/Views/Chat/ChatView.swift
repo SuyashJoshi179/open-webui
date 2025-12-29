@@ -12,7 +12,9 @@ struct ChatView: View {
     let chat: Chat
     
     @StateObject private var viewModel: ChatViewModel
+    @StateObject private var backendManager = BackendManager.shared
     @State private var messageText = ""
+    @State private var showingBackendSettings = false
     @FocusState private var isInputFocused: Bool
     
     init(chat: Chat) {
@@ -40,13 +42,24 @@ struct ChatView: View {
                             PerformanceInsightsView(ttft: ttft, tokensPerSecond: tps)
                                 .padding(.top, 8)
                         }
+                        
+                        // Error message
+                        if let error = viewModel.errorMessage {
+                            errorBanner(error)
+                        }
                     }
                     .padding()
                 }
                 .onChange(of: viewModel.messages.count) { oldValue, newValue in
                     if let lastMessage = viewModel.messages.last {
-                        withAnimation {
+                        if oldValue == 0 {
+                            // Initial load - scroll immediately without animation
                             proxy.scrollTo(lastMessage.id, anchor: .bottom)
+                        } else {
+                            // New message - scroll with animation
+                            withAnimation {
+                                proxy.scrollTo(lastMessage.id, anchor: .bottom)
+                            }
                         }
                     }
                 }
@@ -64,8 +77,24 @@ struct ChatView: View {
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Menu {
+                    if let activeModel = backendManager.activeModel {
+                        Button(action: {}) {
+                            HStack {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundStyle(.green)
+                                Text("Model: \(activeModel.displayName)")
+                            }
+                        }
+                        .disabled(true)
+                        
+                        Divider()
+                    }
+                    
+                    Button(action: { showingBackendSettings = true }) {
+                        Label("Change Backend", systemImage: "cpu")
+                    }
                     Button(action: {}) {
-                        Label("Model Settings", systemImage: "cpu")
+                        Label("Model Settings", systemImage: "slider.horizontal.3")
                     }
                     Button(action: {}) {
                         Label("Enable RAG", systemImage: "doc.text")
@@ -78,11 +107,48 @@ struct ChatView: View {
                 }
             }
         }
+        .sheet(isPresented: $showingBackendSettings) {
+            NavigationStack {
+                BackendSelectionView()
+            }
+        }
         .onAppear {
             Task {
                 await viewModel.loadMessages()
             }
         }
+    }
+    
+    private var backendUnavailableBanner: some View {
+        HStack {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+            Text("Backend unavailable. Check settings.")
+                .font(.caption)
+            Spacer()
+            Button("Settings") {
+                showingBackendSettings = true
+            }
+            .font(.caption)
+            .buttonStyle(.bordered)
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 8)
+        .background(Color.orange.opacity(0.1))
+    }
+    
+    private func errorBanner(_ message: String) -> some View {
+        HStack {
+            Image(systemName: "exclamationmark.circle.fill")
+                .foregroundStyle(.red)
+            Text(message)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding()
+        .frame(maxWidth: .infinity)
+        .background(Color.red.opacity(0.1))
+        .cornerRadius(8)
     }
     
     private var inputBar: some View {
@@ -296,79 +362,70 @@ class ChatViewModel: ObservableObject {
         errorMessage = nil
         
         do {
-            // Check if Apple Intelligence is available
-            if #available(iOS 26.0, *) {
-                let mlxService = MLXService.shared
-                if !mlxService.isModelAvailable {
-                    await mlxService.checkAvailability()
+            // Get the active model from BackendManager
+            let backendManager = BackendManager.shared
+            guard let activeModel = backendManager.activeModel else {
+                throw BackendError.notInitialized
+            }
+            
+            // Prepare context from chat history
+            let chatMessages = messages.map { msg in
+                AIMessage(role: msg.role == .user ? "user" : "assistant", content: msg.content)
+            }
+            
+            let context = AIContext(chatId: chat.id, systemPrompt: chat.metadata?.systemPrompt, conversationHistory: chatMessages)
+            
+            // Reset performance metrics
+            ttft = nil
+            tokensPerSecond = nil
+            firstTokenTime = nil
+            tokenCount = 0
+            generationStartTime = Date()
+            
+            // Create assistant message placeholder
+            let assistantMessage = Message(
+                id: UUID().uuidString,
+                chatId: chat.id,
+                role: .assistant,
+                content: "",
+                timestamp: Date()
+            )
+            messages.append(assistantMessage)
+            
+            var assistantContent = ""
+            
+            // Stream response from active model
+            for try await chunk in backendManager.streamGenerate(
+                prompt: userMessage.content,
+                context: context
+            ) {
+                // Track first token time
+                if firstTokenTime == nil, let startTime = generationStartTime {
+                    firstTokenTime = Date()
+                    ttft = firstTokenTime!.timeIntervalSince(startTime)
                 }
                 
-                if mlxService.isModelAvailable {
-                // Use Apple Intelligence (on-device)
-                var assistantContent = ""
+                assistantContent += chunk
+                tokenCount += chunk.split(separator: " ").count // Rough token estimate
                 
-                // Reset performance metrics
-                ttft = nil
-                tokensPerSecond = nil
-                firstTokenTime = nil
-                tokenCount = 0
-                generationStartTime = Date()
-                
-                // Create assistant message placeholder
-                let assistantMessage = Message(
-                    id: UUID().uuidString,
-                    chatId: chat.id,
-                    role: .assistant,
-                    content: "",
-                    timestamp: Date()
-                )
-                messages.append(assistantMessage)
-                
-                // Stream response from Apple Intelligence
-                for try await chunk in mlxService.streamGenerate(
-                    modelName: "apple-intelligence",
-                    prompt: content,
-                    chatId: chat.id
-                ) {
-                    // Track first token time
-                    if firstTokenTime == nil, let startTime = generationStartTime {
-                        firstTokenTime = Date()
-                        ttft = firstTokenTime!.timeIntervalSince(startTime)
-                    }
-                    
-                    assistantContent += chunk
-                    tokenCount += chunk.split(separator: " ").count // Rough token estimate
-                    
-                    // Calculate tokens per second
-                    if let startTime = generationStartTime {
-                        let elapsed = Date().timeIntervalSince(startTime)
-                        if elapsed > 0 {
-                            tokensPerSecond = Double(tokenCount) / elapsed
-                        }
-                    }
-                    
-                    // Update the last message
-                    if let lastIndex = messages.indices.last {
-                        messages[lastIndex] = Message(
-                            id: messages[lastIndex].id,
-                            chatId: chat.id,
-                            role: .assistant,
-                            content: assistantContent,
-                            timestamp: messages[lastIndex].timestamp
-                        )
+                // Calculate tokens per second
+                if let startTime = generationStartTime {
+                    let elapsed = Date().timeIntervalSince(startTime)
+                    if elapsed > 0 {
+                        tokensPerSecond = Double(tokenCount) / elapsed
                     }
                 }
+                
+                // Update the last message
+                if let lastIndex = messages.indices.last {
+                    messages[lastIndex] = Message(
+                        id: messages[lastIndex].id,
+                        chatId: chat.id,
+                        role: .assistant,
+                        content: assistantContent,
+                        timestamp: messages[lastIndex].timestamp
+                    )
                 }
-            } else {
-                // Apple Intelligence not available - iOS version or device issue
-                let errorMsg = Message(
-                    id: UUID().uuidString,
-                    chatId: chat.id,
-                    role: .assistant,
-                    content: "⚠️ Apple Intelligence requires iOS 26 or later.\n\nYour device: iOS \(ProcessInfo.processInfo.operatingSystemVersionString)",
-                    timestamp: Date()
-                )
-                messages.append(errorMsg)
             }
         } catch {
             errorMessage = error.localizedDescription

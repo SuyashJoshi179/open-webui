@@ -8,50 +8,57 @@
 import SwiftUI
 
 struct ModelsView: View {
-    @StateObject private var viewModel = ModelsViewModel()
+    @ObservedObject private var backendManager = BackendManager.shared
+    @State private var showingBackendSettings = false
     
     var body: some View {
         NavigationStack {
-            List {
-                if !viewModel.localModels.isEmpty {
-                    Section("On-Device Models") {
-                        ForEach(viewModel.localModels) { model in
-                            LocalModelRow(localModel: model)
-                        }
-                    }
-                }
-                
-                if !viewModel.cloudModels.isEmpty {
-                    Section("Cloud Models") {
-                        ForEach(viewModel.cloudModels) { model in
-                            ModelRow(model: model)
-                        }
-                    }
-                } else if viewModel.externalAPIURL.isEmpty {
-                    Section {
-                        VStack(alignment: .center, spacing: 12) {
-                            Image(systemName: "cloud.slash")
-                                .font(.largeTitle)
-                                .foregroundStyle(.secondary)
-                            Text("No Cloud Models")
-                                .font(.headline)
-                            Text("Configure an external API in Settings to use cloud models")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .multilineTextAlignment(.center)
-                        }
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 40)
-                    }
-                }
-            }
+            modelsList
             .navigationTitle("Models")
-            .refreshable {
-                await viewModel.loadModels()
+            .toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    Button(action: { showingBackendSettings = true }) {
+                        Image(systemName: "gearshape")
+                    }
+                }
             }
-            .onAppear {
-                Task {
-                    await viewModel.loadModels()
+            .sheet(isPresented: $showingBackendSettings) {
+                NavigationStack {
+                    BackendSelectionView()
+                }
+            }
+            .refreshable {
+                backendManager.refreshModels()
+            }
+        }
+    }
+    
+    private var modelsList: some View {
+        List {
+            if backendManager.allModels.isEmpty {
+                Section {
+                    VStack(alignment: .center, spacing: 12) {
+                        Image(systemName: "cube.transparent")
+                            .font(.largeTitle)
+                            .foregroundStyle(.secondary)
+                        Text("No Models Available")
+                            .font(.headline)
+                        Text("Add models from backends in Settings")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                        
+                        Button(action: { showingBackendSettings = true }) {
+                            Label("Manage Backends", systemImage: "gearshape")
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 40)
+                }
+            } else {
+                ForEach(backendManager.allModels) { model in
+                    ModelRowWithBackend(model: model, backendManager: backendManager)
                 }
             }
         }
@@ -59,22 +66,19 @@ struct ModelsView: View {
 }
 
 struct ModelRow: View {
-    let model: Model
+    let model: ConfiguredAIModel
     
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(model.name)
+            Text(model.displayName)
                 .font(.headline)
             
-            if let description = model.description {
-                Text(description)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-            }
+            Text(model.modelIdentifier)
+                .font(.caption)
+                .foregroundStyle(.secondary)
             
             HStack {
-                Label(model.provider.rawValue.capitalized, systemImage: "server.rack")
+                Label("\(model.capabilities.maxContextLength) tokens", systemImage: "text.word.spacing")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
@@ -83,63 +87,54 @@ struct ModelRow: View {
     }
 }
 
-struct LocalModelRow: View {
-    let localModel: LocalModel
+struct ModelRowWithBackend: View {
+    let model: ConfiguredAIModel
+    let backendManager: BackendManager
     
     var body: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(localModel.name)
-                    .font(.headline)
+        Button(action: {
+            backendManager.selectModel(model)
+        }) {
+            HStack {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Text(model.displayName)
+                            .font(.headline)
+                            .foregroundStyle(.primary)
+                        
+                        if backendManager.activeModel?.id == model.id {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundStyle(.green)
+                                .font(.caption)
+                        }
+                    }
+                    
+                    Text(model.modelIdentifier)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    
+                    HStack(spacing: 12) {
+                        if let backend = backendManager.getBackend(id: model.backendId) {
+                            Label(backend.name, systemImage: backend.iconName)
+                                .font(.caption)
+                                .foregroundStyle(.blue)
+                        }
+                        
+                        Label("\(model.capabilities.maxContextLength) tokens", systemImage: "text.word.spacing")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
                 
-                Text(ByteCountFormatter.string(fromByteCount: localModel.size, countStyle: .file))
+                Spacer()
+                
+                Image(systemName: "chevron.right")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            
-            Spacer()
-            
-            Image(systemName: "iphone")
-                .foregroundStyle(.green)
+            .contentShape(Rectangle())
         }
-        .padding(.vertical, 4)
-    }
-}
-
-@MainActor
-class ModelsViewModel: ObservableObject {
-    @Published var cloudModels: [Model] = []
-    @Published var localModels: [LocalModel] = []
-    @Published var isLoading = false
-    
-    @AppStorage("externalAPIURL") var externalAPIURL = ""
-    @AppStorage("externalAPIKey") private var externalAPIKey = ""
-    
-    private let openAIService = OpenAIService.shared
-    
-    func loadModels() async {
-        isLoading = true
-        
-        // Always load local Apple Intelligence model first
-        if #available(iOS 26.0, *) {
-            let mlxService = MLXService.shared
-            localModels = mlxService.listLocalModels()
-        }
-        
-        // Only load cloud models if user has configured an external API
-        if !externalAPIURL.isEmpty && !externalAPIURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            do {
-                cloudModels = try await openAIService.listModels()
-            } catch {
-                print("Error loading cloud models: \(error)")
-                cloudModels = []
-            }
-        } else {
-            // No external API configured, clear cloud models
-            cloudModels = []
-        }
-        
-        isLoading = false
+        .buttonStyle(.plain)
     }
 }
 

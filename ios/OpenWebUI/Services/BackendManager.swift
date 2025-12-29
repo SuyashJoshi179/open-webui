@@ -2,253 +2,285 @@
 //  BackendManager.swift
 //  OpenWebUI
 //
-//  Central manager for all AI backends
+//  Central manager for AI backends in model-centric architecture.
+//  Aggregates models from all backends and provides unified access.
 //
 
 import Foundation
 import SwiftUI
 
-/// Manages all available AI backends and coordinates their lifecycle
+/// Manages all AI backends and provides unified access to models
 @MainActor
 class BackendManager: ObservableObject {
     static let shared = BackendManager()
     
     // MARK: - Published Properties
     
-    @Published private(set) var availableBackends: [AIBackend] = []
-    @Published var activeBackend: AIBackend?
+    /// All configured models from all backends
+    @Published private(set) var allModels: [ConfiguredAIModel] = []
+    
+    /// Currently selected model for generation
+    @Published var activeModel: ConfiguredAIModel?
+    
+    /// All registered backends
+    @Published private(set) var backends: [any AIBackend] = []
+    
+    /// Whether initialization is in progress
     @Published private(set) var isInitializing = false
+    
+    /// Current error, if any
     @Published var error: BackendError?
     
     // MARK: - Private Properties
     
-    private var backendRegistry: [String: AIBackend] = [:]
-    private let settingsManager = BackendSettingsManager.shared
+    private var backendRegistry: [String: any AIBackend] = [:]
     private let userDefaults = UserDefaults.standard
-    private let activeBackendKey = "active_backend_id"
+    private let activeModelKey = "active_model_id"
+    
+    // MARK: - Auto-Discovery Registry
+    
+    /// Static registry for backend factories (Spring Boot-style component scanning)
+    private static var backendFactories: [@MainActor () -> (any AIBackend)?] = []
+    
+    /// Register a backend factory for auto-discovery
+    public static func registerBackendFactory(_ factory: @escaping @MainActor () -> (any AIBackend)?) {
+        backendFactories.append(factory)
+    }
     
     // MARK: - Initialization
     
     private init() {
-        loadSavedActiveBackend()
+        // Trigger auto-registration
+        Self.triggerAutoRegistration()
+        
+        // Discover and register all backends
+        discoverAndRegisterBackends()
+        
+        // Refresh model list
+        refreshModels()
+        
+        // Load saved active model
+        loadSavedActiveModel()
+        
+        // Initialize all backends in background
+        Task {
+            await initializeAllBackends()
+            print("✅ All backends initialized, \(allModels.count) models available")
+        }
     }
     
-    // MARK: - Backend Registration
+    /// Trigger static auto-registration properties
+    private static func triggerAutoRegistration() {
+        if #available(iOS 26.0, *) {
+            _ = AppleFoundationBackend.autoRegister
+        }
+        _ = OpenAICompatibleBackend.autoRegister
+        _ = LlamaCppBackend.autoRegister
+        _ = LiteRTBackend.autoRegister
+    }
     
-    /// Register a new backend with the manager
-    /// - Parameter backend: The backend to register
-    func registerBackend(_ backend: AIBackend) {
+    /// Discover and register all backends automatically
+    private func discoverAndRegisterBackends() {
+        for factory in Self.backendFactories {
+            if let backend = factory() {
+                registerBackend(backend)
+            }
+        }
+    }
+    
+    // MARK: - Backend Management
+    
+    /// Register a new backend
+    func registerBackend(_ backend: any AIBackend) {
         guard backendRegistry[backend.id] == nil else {
             print("⚠️ Backend \(backend.id) already registered")
             return
         }
         
         backendRegistry[backend.id] = backend
-        availableBackends.append(backend)
+        backends.append(backend)
         
         print("✅ Registered backend: \(backend.name)")
         
-        // Initialize the backend in the background
-        Task {
-            await initializeBackend(backend)
-        }
+        // Refresh models to include this backend's models
+        refreshModels()
     }
     
-    /// Unregister a backend
-    /// - Parameter backendId: ID of the backend to unregister
-    func unregisterBackend(_ backendId: String) {
-        guard let backend = backendRegistry[backendId] else { return }
-        
-        Task {
-            await backend.cleanup()
-        }
-        
-        backendRegistry.removeValue(forKey: backendId)
-        availableBackends.removeAll { $0.id == backendId }
-        
-        if activeBackend?.id == backendId {
-            activeBackend = nil
-        }
-    }
-    
-    // MARK: - Backend Management
-    
-    /// Get a backend by its ID
-    /// - Parameter id: The backend ID
-    /// - Returns: The backend if found
-    func getBackend(id: String) -> AIBackend? {
+    /// Get backend by ID
+    func getBackend(id: String) -> (any AIBackend)? {
         return backendRegistry[id]
     }
     
-    /// Set the active backend
-    /// - Parameter backendId: ID of the backend to activate
-    func setActiveBackend(_ backendId: String) async throws {
-        guard let backend = backendRegistry[backendId] else {
-            throw BackendError.notAvailable
-        }
-        
-        // Check if backend is available
-        let isAvailable = await backend.checkAvailability()
-        guard isAvailable else {
-            throw BackendError.notAvailable
-        }
-        
-        // Initialize if needed
-        if !backend.isAvailable {
-            try await backend.initialize()
-        }
-        
-        // Set as active
-        activeBackend = backend
-        userDefaults.set(backendId, forKey: activeBackendKey)
-        
-        print("✅ Active backend set to: \(backend.name)")
-    }
-    
-    /// Get all available models across all backends
-    /// - Returns: Array of all available models
-    func getAllModels() async throws -> [AIModel] {
-        var allModels: [AIModel] = []
-        
-        for backend in availableBackends where backend.isAvailable {
-            do {
-                let models = try await backend.listModels()
-                allModels.append(contentsOf: models)
-            } catch {
-                print("⚠️ Failed to load models from \(backend.name): \(error)")
-            }
-        }
-        
-        return allModels
-    }
-    
-    /// Get models for a specific backend
-    /// - Parameter backendId: The backend ID
-    /// - Returns: Array of models for that backend
-    func getModels(for backendId: String) async throws -> [AIModel] {
-        guard let backend = backendRegistry[backendId] else {
-            throw BackendError.notAvailable
-        }
-        
-        return try await backend.listModels()
-    }
-    
-    // MARK: - Initialization
-    
-    /// Initialize a specific backend
-    /// - Parameter backend: The backend to initialize
-    private func initializeBackend(_ backend: AIBackend) async {
-        do {
-            let isAvailable = await backend.checkAvailability()
-            if isAvailable {
-                try await backend.initialize()
-                print("✅ Initialized backend: \(backend.name)")
-            } else {
-                print("⚠️ Backend not available: \(backend.name)")
-            }
-        } catch {
-            print("❌ Failed to initialize backend \(backend.name): \(error)")
-        }
-    }
-    
-    /// Initialize all registered backends
+    /// Initialize all backends
     func initializeAllBackends() async {
         isInitializing = true
         defer { isInitializing = false }
         
-        // Initialize backends sequentially to avoid actor isolation issues
-        for backend in availableBackends {
-            await initializeBackend(backend)
+        for backend in backends {
+            do {
+                try await backend.initialize()
+                print("✅ Initialized \(backend.name)")
+            } catch {
+                print("❌ Failed to initialize \(backend.name): \(error)")
+            }
         }
         
-        // If no active backend is set, try to set a default
-        if activeBackend == nil {
-            await setDefaultBackend()
-        }
+        // Refresh models after initialization
+        refreshModels()
     }
     
-    /// Set a default backend (prefer Apple Foundation if available)
-    private func setDefaultBackend() async {
-        // Try Apple Foundation first
-        if let appleBackend = availableBackends.first(where: { $0.id == "apple-foundation" && $0.isAvailable }) {
-            try? await setActiveBackend(appleBackend.id)
-            return
+    // MARK: - Model Management
+    
+    /// Refresh the list of all models from all backends
+    func refreshModels() {
+        allModels = backends.flatMap { $0.getConfiguredModels() }
+        objectWillChange.send()
+    }
+    
+    /// Add a new model to a backend
+    /// - Parameters:
+    ///   - backendId: ID of the backend to add the model to
+    ///   - config: Configuration for the new model
+    /// - Returns: The newly created model
+    /// - Throws: BackendError if the backend doesn't exist or doesn't support adding models
+    func addModel(to backendId: String, config: ModelConfiguration) throws -> ConfiguredAIModel {
+        guard let backend = backendRegistry[backendId] else {
+            throw BackendError.backendNotFound
         }
         
-        // Fall back to first available backend
-        if let firstAvailable = availableBackends.first(where: { $0.isAvailable }) {
-            try? await setActiveBackend(firstAvailable.id)
+        guard backend.supportsModelAddition() else {
+            throw BackendError.operationNotSupported
         }
+        
+        let model = try backend.addModel(config)
+        refreshModels()
+        return model
+    }
+    
+    /// Remove a model
+    /// - Parameter modelId: ID of the model to remove
+    /// - Throws: BackendError if the model doesn't exist or can't be removed
+    func removeModel(_ modelId: UUID) throws {
+        guard let model = allModels.first(where: { $0.id == modelId }) else {
+            throw BackendError.modelNotFound
+        }
+        
+        guard let backend = backendRegistry[model.backendId] else {
+            throw BackendError.backendNotFound
+        }
+        
+        guard backend.supportsModelRemoval() else {
+            throw BackendError.operationNotSupported
+        }
+        
+        try backend.removeModel(modelId)
+        
+        // If this was the active model, clear selection
+        if activeModel?.id == modelId {
+            activeModel = nil
+            userDefaults.removeObject(forKey: activeModelKey)
+        }
+        
+        refreshModels()
+    }
+    
+    /// Update a model's configuration
+    /// - Parameters:
+    ///   - modelId: ID of the model to update
+    ///   - config: New configuration
+    /// - Throws: BackendError if the model doesn't exist
+    func updateModel(_ modelId: UUID, config: ModelConfiguration) throws {
+        guard let model = allModels.first(where: { $0.id == modelId }) else {
+            throw BackendError.modelNotFound
+        }
+        
+        guard let backend = backendRegistry[model.backendId] else {
+            throw BackendError.backendNotFound
+        }
+        
+        try backend.updateModel(modelId, config: config)
+        refreshModels()
+    }
+    
+    // MARK: - Model Selection
+    
+    /// Select a model as the active model for generation
+    /// - Parameter model: The model to select
+    func selectModel(_ model: ConfiguredAIModel) {
+        activeModel = model
+        saveActiveModelId(model.id)
+        print("✅ Selected model: \(model.displayName)")
+    }
+    
+    /// Select a model by ID
+    /// - Parameter modelId: ID of the model to select
+    /// - Throws: BackendError if the model doesn't exist
+    func selectModel(id modelId: UUID) throws {
+        guard let model = allModels.first(where: { $0.id == modelId }) else {
+            throw BackendError.modelNotFound
+        }
+        selectModel(model)
+    }
+    
+    /// Get models grouped by backend
+    func getModelsGroupedByBackend() -> [(backend: any AIBackend, models: [ConfiguredAIModel])] {
+        var grouped: [(backend: any AIBackend, models: [ConfiguredAIModel])] = []
+        
+        for backend in backends {
+            let backendModels = backend.getConfiguredModels()
+            if !backendModels.isEmpty {
+                grouped.append((backend: backend, models: backendModels))
+            }
+        }
+        
+        return grouped
+    }
+    
+    // MARK: - Generation Operations
+    
+    /// Stream generate text using the active model
+    /// - Parameters:
+    ///   - prompt: Input prompt
+    ///   - context: Additional context
+    /// - Returns: Async stream of text chunks
+    func streamGenerate(
+        prompt: String,
+        context: AIContext = AIContext(chatId: UUID().uuidString)
+    ) -> AsyncThrowingStream<String, Error> {
+        guard let model = activeModel else {
+            return AsyncThrowingStream { continuation in
+                continuation.finish(throwing: BackendError.noActiveModel)
+            }
+        }
+        
+        guard let backend = backendRegistry[model.backendId] else {
+            return AsyncThrowingStream { continuation in
+                continuation.finish(throwing: BackendError.backendNotFound)
+            }
+        }
+        
+        return backend.streamGenerate(
+            modelId: model.id,
+            prompt: prompt,
+            context: context
+        )
     }
     
     // MARK: - Persistence
     
-    private func loadSavedActiveBackend() {
-        guard let savedBackendId = userDefaults.string(forKey: activeBackendKey) else {
+    private func saveActiveModelId(_ modelId: UUID) {
+        userDefaults.set(modelId.uuidString, forKey: activeModelKey)
+    }
+    
+    private func loadSavedActiveModel() {
+        guard let savedId = userDefaults.string(forKey: activeModelKey),
+              let uuid = UUID(uuidString: savedId),
+              let model = allModels.first(where: { $0.id == uuid }) else {
+            // No saved model or model no longer exists, select first available
+            activeModel = allModels.first
             return
         }
         
-        // Will be set after backends are registered and initialized
-        Task {
-            try? await Task.sleep(nanoseconds: 500_000_000) // Wait 0.5s for registration
-            if let backend = backendRegistry[savedBackendId], backend.isAvailable {
-                try? await setActiveBackend(savedBackendId)
-            }
-        }
-    }
-    
-    // MARK: - Cleanup
-    
-    /// Cleanup all backends
-    func cleanupAllBackends() async {
-        // Cleanup backends sequentially to avoid actor isolation issues
-        for backend in availableBackends {
-            await backend.cleanup()
-        }
-    }
-}
-
-// MARK: - Backend Info
-
-extension BackendManager {
-    /// Get information about all backends
-    func getBackendInfo() -> [(backend: AIBackend, modelCount: Int?, status: BackendStatus)] {
-        return availableBackends.map { backend in
-            let status: BackendStatus = backend.isAvailable ? .available : .unavailable
-            return (backend: backend, modelCount: nil, status: status)
-        }
-    }
-}
-
-enum BackendStatus {
-    case available
-    case unavailable
-    case initializing
-    case error(String)
-    
-    var displayText: String {
-        switch self {
-        case .available:
-            return "Available"
-        case .unavailable:
-            return "Unavailable"
-        case .initializing:
-            return "Initializing..."
-        case .error(let message):
-            return "Error: \(message)"
-        }
-    }
-    
-    var color: Color {
-        switch self {
-        case .available:
-            return .green
-        case .unavailable:
-            return .gray
-        case .initializing:
-            return .orange
-        case .error:
-            return .red
-        }
+        activeModel = model
     }
 }

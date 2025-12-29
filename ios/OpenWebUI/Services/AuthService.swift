@@ -2,7 +2,7 @@
 //  AuthService.swift
 //  OpenWebUI
 //
-//  Authentication service
+//  Authentication service - Local-only mode (no backend authentication required)
 //
 
 import Foundation
@@ -12,83 +12,39 @@ import Combine
 public class AuthService: ObservableObject {
     public static let shared = AuthService()
     
-    @Published public var isAuthenticated: Bool = false
-    @Published public var currentUser: User?
-    
-    private let apiClient = APIClient.shared
-    private var cancellables = Set<AnyCancellable>()
+    // In local-only mode, user is always authenticated
+    @Published public var isAuthenticated: Bool = true
+    @Published public var currentUser: User? = User(
+        id: "local-user",
+        email: "local@device",
+        name: "Local User",
+        role: .user,
+        profileImageUrl: nil,
+        createdAt: Date(),
+        updatedAt: Date()
+    )
     
     private init() {
-        // Check if user is already authenticated
-        checkAuthStatus()
+        // App is fully local - no authentication needed
     }
     
-    // MARK: - Authentication
+    // MARK: - Authentication (Stubbed for local-only mode)
     
     func login(email: String, password: String) async throws {
-        let request = LoginRequest(email: email, password: password)
-        let response: AuthResponse = try await apiClient.request(
-            path: "/api/auths/signin",
-            method: "POST",
-            body: request
-        )
-        
-        apiClient.setAuthToken(response.token)
-        
-        await MainActor.run {
-            self.currentUser = response.user
-            self.isAuthenticated = true
-        }
+        // No-op in local mode - already authenticated
+        isAuthenticated = true
     }
     
     func signup(email: String, password: String, name: String) async throws {
-        let request = SignupRequest(email: email, password: password, name: name)
-        let response: AuthResponse = try await apiClient.request(
-            path: "/api/auths/signup",
-            method: "POST",
-            body: request
-        )
-        
-        apiClient.setAuthToken(response.token)
-        
-        await MainActor.run {
-            self.currentUser = response.user
-            self.isAuthenticated = true
-        }
+        // No-op in local mode - already authenticated
+        isAuthenticated = true
     }
     
     func logout() {
-        apiClient.setAuthToken(nil)
-        
-        currentUser = nil
-        isAuthenticated = false
+        // No-op in local mode - can't log out of local device
     }
     
     func refreshToken() async throws {
-        // Implement token refresh if backend supports it
-        let user: User = try await apiClient.request(path: "/api/auths/me")
-        
-        await MainActor.run {
-            self.currentUser = user
-        }
-    }
-    
-    // MARK: - Private Methods
-    
-    private func checkAuthStatus() {
-        // Check if we have a saved token
-        if let _ = KeychainHelper.load(forKey: "auth_token") {
-            Task {
-                do {
-                    try await refreshToken()
-                    await MainActor.run {
-                        self.isAuthenticated = true
-                    }
-                } catch {
-                    // Token is invalid, clear it
-                    logout()
-                }
-            }
-        }
+        // No-op in local mode
     }
 }

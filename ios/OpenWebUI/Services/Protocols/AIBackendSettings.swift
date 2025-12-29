@@ -9,6 +9,7 @@ import Foundation
 import SwiftUI
 
 /// Protocol that all backend settings must implement
+@MainActor
 protocol AIBackendSettings: Codable {
     /// The backend this settings object belongs to
     var backendId: String { get }

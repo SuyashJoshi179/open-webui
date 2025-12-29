@@ -2,13 +2,15 @@
 //  AIBackend.swift
 //  OpenWebUI
 //
-//  Core protocol that all AI backends must implement
+//  Core protocol for AI backends in the model-centric architecture.
+//  Backends are model providers that manage collections of configured models.
 //
 
 import Foundation
 import SwiftUI
 
-/// Core protocol that defines the interface for all AI backends
+/// Core protocol that all AI backends must implement
+/// Backends serve as model providers in the new architecture
 @MainActor
 protocol AIBackend: AnyObject, Identifiable {
     /// Unique identifier for the backend
@@ -20,62 +22,70 @@ protocol AIBackend: AnyObject, Identifiable {
     /// Description of the backend and its capabilities
     var description: String { get }
     
-    /// Whether the backend is currently available and ready to use
-    var isAvailable: Bool { get }
-    
     /// Icon name for the backend (SF Symbol)
     var iconName: String { get }
     
-    /// Backend-specific settings
-    var settings: AIBackendSettings { get }
+    /// Backend-level settings that apply to all models
+    var backendSettings: AIBackendSettings { get set }
+    
+    // MARK: - Model Management
+    
+    /// Get all configured models for this backend
+    /// - Returns: Array of configured model instances
+    func getConfiguredModels() -> [ConfiguredAIModel]
+    
+    /// Add a new model to this backend
+    /// - Parameter config: Configuration for the new model
+    /// - Returns: The newly created configured model
+    /// - Throws: BackendError if the model cannot be added
+    func addModel(_ config: ModelConfiguration) throws -> ConfiguredAIModel
+    
+    /// Remove a model from this backend
+    /// - Parameter modelId: ID of the model to remove
+    /// - Throws: BackendError if the model cannot be removed
+    func removeModel(_ modelId: UUID) throws
+    
+    /// Update an existing model's configuration
+    /// - Parameters:
+    ///   - modelId: ID of the model to update
+    ///   - config: New configuration
+    /// - Throws: BackendError if the model cannot be updated
+    func updateModel(_ modelId: UUID, config: ModelConfiguration) throws
+    
+    // MARK: - Capabilities
+    
+    /// Whether this backend supports adding new models
+    func supportsModelAddition() -> Bool
+    
+    /// Whether this backend supports removing models
+    func supportsModelRemoval() -> Bool
+    
+    // MARK: - Operations
     
     /// Initialize the backend and prepare it for use
     /// - Throws: BackendError if initialization fails
     func initialize() async throws
     
-    /// Check if the backend is available on this device
-    /// - Returns: true if the backend can be used
-    func checkAvailability() async -> Bool
-    
-    /// List all models available for this backend
-    /// - Returns: Array of available models
-    func listModels() async throws -> [AIModel]
-    
-    /// Stream text generation from the model
+    /// Stream text generation from a specific model
     /// - Parameters:
-    ///   - model: Model identifier to use
+    ///   - modelId: ID of the configured model to use
     ///   - prompt: Input prompt
     ///   - context: Additional context (chat history, system prompt, etc.)
-    ///   - parameters: Generation parameters (temperature, top_p, etc.)
     /// - Returns: Async stream of text chunks
     func streamGenerate(
-        model: String,
+        modelId: UUID,
         prompt: String,
-        context: AIContext,
-        parameters: GenerationParameters
+        context: AIContext
     ) -> AsyncThrowingStream<String, Error>
     
     /// Cleanup resources when backend is no longer needed
     func cleanup() async
 }
 
-/// Additional capabilities that backends may support
-protocol AIBackendCapabilities {
-    /// Whether the backend supports embeddings
-    var supportsEmbeddings: Bool { get }
-    
-    /// Whether the backend supports vision/image understanding
-    var supportsVision: Bool { get }
-    
-    /// Whether the backend supports function calling
-    var supportsFunctionCalling: Bool { get }
-    
-    /// Maximum context length supported
-    var maxContextLength: Int { get }
-}
+// MARK: - Supporting Types
 
-/// Message representation for conversation history in AI backends
-struct AIMessage: Codable {
+/// Message representation for conversation history
+struct AIMessage: Codable, Hashable {
     let role: String
     let content: String
     let timestamp: Date?
@@ -107,72 +117,8 @@ struct AIContext {
     }
 }
 
-/// Parameters for text generation
-struct GenerationParameters {
-    var temperature: Double
-    var topP: Double
-    var topK: Int?
-    var maxTokens: Int
-    var stopSequences: [String]
-    var frequencyPenalty: Double?
-    var presencePenalty: Double?
-    
-    static let `default` = GenerationParameters(
-        temperature: 0.7,
-        topP: 0.9,
-        topK: nil,
-        maxTokens: 2048,
-        stopSequences: [],
-        frequencyPenalty: nil,
-        presencePenalty: nil
-    )
-}
-
-/// Common model representation across all backends
-struct AIModel: Identifiable, Codable {
-    let id: String
-    let name: String
-    let backendId: String
-    let description: String?
-    let capabilities: ModelCapabilities
-    let metadata: ModelMetadata?
-    
-    init(
-        id: String,
-        name: String,
-        backendId: String,
-        description: String? = nil,
-        capabilities: ModelCapabilities = .default,
-        metadata: ModelMetadata? = nil
-    ) {
-        self.id = id
-        self.name = name
-        self.backendId = backendId
-        self.description = description
-        self.capabilities = capabilities
-        self.metadata = metadata
-    }
-}
-
-/// Model capabilities
-struct ModelCapabilities: Codable {
-    let supportsStreaming: Bool
-    let supportsVision: Bool
-    let supportsFunctionCalling: Bool
-    let maxContextLength: Int
-    let maxOutputTokens: Int
-    
-    static let `default` = ModelCapabilities(
-        supportsStreaming: true,
-        supportsVision: false,
-        supportsFunctionCalling: false,
-        maxContextLength: 4096,
-        maxOutputTokens: 2048
-    )
-}
-
 /// Additional model metadata
-struct ModelMetadata: Codable {
+struct ModelMetadata: Codable, Hashable {
     let size: Int64?
     let family: String?
     let version: String?
@@ -202,12 +148,15 @@ enum BackendError: LocalizedError {
     case notAvailable
     case notInitialized
     case initializationFailed(String)
-    case modelNotFound(String)
+    case modelNotFound
+    case backendNotFound
+    case noActiveModel
     case generationFailed(String)
     case invalidConfiguration(String)
     case networkError(String)
     case authenticationFailed
     case quotaExceeded
+    case operationNotSupported
     
     var errorDescription: String? {
         switch self {
@@ -217,8 +166,12 @@ enum BackendError: LocalizedError {
             return "Backend has not been initialized"
         case .initializationFailed(let message):
             return "Failed to initialize backend: \(message)"
-        case .modelNotFound(let modelId):
-            return "Model not found: \(modelId)"
+        case .modelNotFound:
+            return "Model not found"
+        case .backendNotFound:
+            return "Backend not found"
+        case .noActiveModel:
+            return "No model is currently selected"
         case .generationFailed(let message):
             return "Generation failed: \(message)"
         case .invalidConfiguration(let message):
@@ -229,6 +182,8 @@ enum BackendError: LocalizedError {
             return "Authentication failed. Please check your credentials."
         case .quotaExceeded:
             return "API quota exceeded. Please try again later."
+        case .operationNotSupported:
+            return "This operation is not supported by this backend"
         }
     }
 }
