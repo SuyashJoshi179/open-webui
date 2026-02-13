@@ -209,6 +209,7 @@ class BackendManager: ObservableObject {
     func selectModel(_ model: ConfiguredAIModel) {
         activeModel = model
         saveActiveModelId(model.id)
+        objectWillChange.send()
         print("✅ Selected model: \(model.displayName)")
     }
     

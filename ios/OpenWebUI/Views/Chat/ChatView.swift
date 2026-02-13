@@ -12,9 +12,10 @@ struct ChatView: View {
     let chat: Chat
     
     @StateObject private var viewModel: ChatViewModel
-    @StateObject private var backendManager = BackendManager.shared
+    @ObservedObject private var backendManager = BackendManager.shared
     @State private var messageText = ""
     @State private var showingBackendSettings = false
+    @State private var showingModelPicker = false
     @FocusState private var isInputFocused: Bool
     
     init(chat: Chat) {
@@ -90,11 +91,11 @@ struct ChatView: View {
                         Divider()
                     }
                     
-                    Button(action: { showingBackendSettings = true }) {
-                        Label("Change Backend", systemImage: "cpu")
+                    Button(action: { showingModelPicker = true }) {
+                        Label("Change Model", systemImage: "cpu")
                     }
-                    Button(action: {}) {
-                        Label("Model Settings", systemImage: "slider.horizontal.3")
+                    Button(action: { showingBackendSettings = true }) {
+                        Label("Backend Settings", systemImage: "gearshape")
                     }
                     Button(action: {}) {
                         Label("Enable RAG", systemImage: "doc.text")
@@ -106,6 +107,9 @@ struct ChatView: View {
                     Image(systemName: "ellipsis.circle")
                 }
             }
+        }
+        .sheet(isPresented: $showingModelPicker) {
+            ModelPickerView(isPresented: $showingModelPicker)
         }
         .sheet(isPresented: $showingBackendSettings) {
             NavigationStack {

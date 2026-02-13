@@ -11,7 +11,7 @@ struct NewChatView: View {
     @Environment(\.dismiss) var dismiss
     @EnvironmentObject var chatStorage: ChatStorage
     @StateObject private var viewModel = NewChatViewModel()
-    @StateObject private var backendManager = BackendManager.shared
+    @ObservedObject private var backendManager = BackendManager.shared
     
     @State private var title = ""
     @State private var selectedModelIds: Set<String> = []

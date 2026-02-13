@@ -8,7 +8,7 @@
 import SwiftUI
 
 struct BackendSelectionView: View {
-    @StateObject private var backendManager = BackendManager.shared
+    @ObservedObject private var backendManager = BackendManager.shared
     @State private var selectedBackendId: String?
     @State private var showingSettings = false
     @State private var settingsBackend: (any AIBackend)?
