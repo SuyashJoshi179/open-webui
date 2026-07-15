@@ -1,3 +1,11 @@
+# Fork by Suyash Joshi
+
+This is a personal fork of [Open WebUI](https://github.com/open-webui/open-webui). This branch adds an experimental **iOS app** that explores running **on-device foundation models (Apple Intelligence)** for document reading and conversation, along with RAG support. Work-in-progress prototype; see the `ios/` directory and the commit history for the added work.
+
+The upstream project's README follows below.
+
+---
+
 # Open WebUI 👋
 
 ![GitHub stars](https://img.shields.io/github/stars/open-webui/open-webui?style=social)
